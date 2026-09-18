@@ -15,8 +15,14 @@ class ClinicalReasoning:
 
     def __init__(self, graph: Any, rules: Optional[ProtocolRules] = None):
         self.graph = graph
-        self.rules = rules or ProtocolRules.for_cut(getattr(graph, "cut", None))
+        self._explicit_rules = rules
         self.normalizer = LabNormalizer(graph.reference_ranges)
+
+    @property
+    def rules(self) -> ProtocolRules:
+        if self._explicit_rules is not None:
+            return self._explicit_rules
+        return ProtocolRules.for_cut(getattr(self.graph, "cut", None))
 
     def detect_hys_law_candidates(
         self,
@@ -328,19 +334,30 @@ class ClinicalReasoning:
         for dom in target_domains:
             dom_recs = p360["records_by_domain"].get(dom, [])
             for rec in dom_recs:
-                dt_str = (
-                    rec.get(f"{dom}DTC")
-                    or rec.get(f"{dom}STDTC")
+                start_str = (
+                    rec.get(f"{dom}STDTC")
+                    or rec.get(f"{dom}DTC")
                     or rec.get("LBDTC")
                     or rec.get("AESTDTC")
                     or rec.get("VSDTC")
                 )
-                rec_date = parse_date(dt_str)
-                if rec_date and within_window(rec_date, anchor_date, window_days):
+                end_str = rec.get(f"{dom}ENDTC") or rec.get("AEENDTC")
+                start_date = parse_date(start_str)
+                end_date = parse_date(end_str)
+
+                matches = False
+                if start_date and within_window(start_date, anchor_date, window_days):
+                    matches = True
+                elif end_date and within_window(end_date, anchor_date, window_days):
+                    matches = True
+                elif start_date and end_date and (start_date <= anchor_date <= end_date):
+                    matches = True
+
+                if matches:
                     seq = rec.get("seq")
                     matching_refs.append({"domain": dom, "usubjid": usubjid, "seq": seq})
                     term = rec.get("AETERM") or rec.get("LBTESTCD") or rec.get("VSTESTCD") or dom
-                    descriptions.append(f"{dom}:{term} (seq {seq}) on {rec_date}")
+                    descriptions.append(f"{dom}:{term} (seq {seq}) on {start_date or end_date}")
 
         text = (
             f"Found {len(matching_refs)} records for {usubjid} within {window_days} days of {visit_name} ({anchor_date}): "

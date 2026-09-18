@@ -1,0 +1,3 @@
+# Study Sentinel Stage 1 - ATLAS
+# Built entirely using Python standard libraries (csv, json, datetime, re, unittest, pathlib, etc.)
+# No external dependencies required for pure deterministic execution.

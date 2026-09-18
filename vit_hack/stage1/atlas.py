@@ -373,9 +373,15 @@ class Atlas:
 
     def __init__(self, graph: StudyGraph, rules: Optional[ProtocolRules] = None):
         self.graph = graph
-        self.rules = rules or ProtocolRules.for_cut(getattr(graph, "cut", None))
-        self.clinical = ClinicalReasoning(graph, self.rules)
+        self._explicit_rules = rules
+        self.clinical = ClinicalReasoning(graph, rules)
         self.validator = EvidenceValidator(graph)
+
+    @property
+    def rules(self) -> ProtocolRules:
+        if self._explicit_rules is not None:
+            return self._explicit_rules
+        return ProtocolRules.for_cut(getattr(self.graph, "cut", None))
 
     def answer(self, question: Union[Question, Dict[str, Any]]) -> Answer:
         """Answers a clinical query citing verified record evidence.
