@@ -1,18 +1,28 @@
-"""Stage 1 - ATLAS: StudyGraph data loading and representation layer.
+"""Stage 1 - ATLAS: StudyGraph and Atlas Question Answering Engine.
 
-This module implements the StudyGraph class responsible for loading, validating,
-correcting, and indexing clinical trial records into an in-memory graph
-and subject index (Patient 360).
+This module implements:
+- StudyGraph: In-memory clinical knowledge graph and multi-domain index.
+- Atlas: Deterministic question answering engine proving answers with verified RecordRefs.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
+import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+
+from stage1.dates import parse_date, within_window
+from stage1.evidence import EvidenceValidator
+from stage1.normalization import LabNormalizer
+from stage1.reasoning import ClinicalReasoning
+from stage1.rules import ProtocolRules
+from starter.schemas import Answer, Question, RecordRef
 
 logger = logging.getLogger(__name__)
 
@@ -106,13 +116,11 @@ class StudyGraph:
 
             cleaned_header = [col.strip() for col in header]
 
-            for row_idx, raw_row in enumerate(reader, start=2):
+            for raw_row in reader:
                 if not raw_row:
                     continue  # Skip empty line
-                # Handle row with fewer columns than header by padding
                 if len(raw_row) < len(cleaned_header):
                     raw_row = raw_row + [""] * (len(cleaned_header) - len(raw_row))
-                # Handle row with more columns than header by slicing
                 elif len(raw_row) > len(cleaned_header):
                     raw_row = raw_row[:len(cleaned_header)]
 
@@ -129,7 +137,6 @@ class StudyGraph:
             if parsed is not None:
                 return parsed
 
-        # Check alternative SEQ column names
         for col in ("seq", "SEQ", "Sequence"):
             if col in row and row[col]:
                 parsed = self._safe_int(row[col])
@@ -163,7 +170,6 @@ class StudyGraph:
         self.reference_ranges = self._read_csv("reference_ranges.csv")
         raw_corrections = self._read_csv("corrections.csv")
         
-        # Parse corrections
         parsed_corrections = []
         for corr in raw_corrections:
             c_cut = self._safe_int(corr.get("cut"))
@@ -181,7 +187,7 @@ class StudyGraph:
                 })
         self.corrections = parsed_corrections
 
-        # 2. Load Demographics (DM.csv) first to initialize subjects
+        # 2. Load Demographics (DM.csv)
         dm_rows = self._read_csv("DM.csv")
         for row in dm_rows:
             usubjid = row.get("USUBJID", "").strip()
@@ -200,7 +206,6 @@ class StudyGraph:
 
             arm = row.get("ARM", "").strip()
 
-            # Record Demographics as domain record with seq=1
             dm_record = dict(row)
             dm_record["domain"] = "DM"
             dm_record["usubjid"] = usubjid
@@ -217,7 +222,6 @@ class StudyGraph:
             self.records_by_ref[("DM", usubjid, 1)] = dm_record
             self.subject_domain_records[(usubjid, "DM")] = [dm_record]
 
-            # Graph Nodes & Edges
             subj_node = ("Subject", usubjid)
             self.nodes.add(subj_node)
             if site_id:
@@ -239,7 +243,7 @@ class StudyGraph:
             for row in raw_rows:
                 usubjid = row.get("USUBJID", "").strip()
                 if not usubjid:
-                    continue  # Malformed row without subject ID
+                    continue
 
                 cut_avail = self._safe_int(row.get("cut_available"), 1)
                 if cut is not None and cut_avail is not None and cut_avail > cut:
@@ -248,7 +252,6 @@ class StudyGraph:
                 auto_seq_counter[usubjid] = auto_seq_counter.get(usubjid, 0) + 1
                 seq = self._extract_seq(domain, row, auto_seq_counter[usubjid])
 
-                # Ensure subject exists even if DM record was missing
                 if usubjid not in self.subjects:
                     site_id = ""
                     if "-" in usubjid:
@@ -278,13 +281,11 @@ class StudyGraph:
                 ref_key = (domain, usubjid, seq)
                 self.records_by_ref[ref_key] = record
 
-                # Group by subject and domain
                 sub_dom_key = (usubjid, domain)
                 if sub_dom_key not in self.subject_domain_records:
                     self.subject_domain_records[sub_dom_key] = []
                 self.subject_domain_records[sub_dom_key].append(record)
 
-                # Group by visit if applicable
                 visit = row.get("VISIT", "").strip()
                 if usubjid not in self.subject_visits:
                     self.subject_visits[usubjid] = {}
@@ -333,15 +334,7 @@ class StudyGraph:
         return stats
 
     def patient360(self, usubjid: str) -> Dict[str, Any]:
-        """Returns the connected representation of all records for a subject.
-        
-        Args:
-            usubjid: Unique subject identifier (e.g. '042-S07-001').
-            
-        Returns:
-            Dictionary containing demographics, records grouped by domain,
-            records grouped by visit, and a complete flat list of all records.
-        """
+        """Returns the connected representation of all records for a subject."""
         subj = self.subjects.get(usubjid)
         if not subj:
             return {"usubjid": usubjid, "records": []}
@@ -372,12 +365,251 @@ class StudyGraph:
 
 
 class Atlas:
-    """Atlas query engine stub for Stage 1.
+    """Stage 1 Question-Answering Agent for Study Sentinel.
     
-    Deferred to the next architecture layer per instructions.
+    Parses reviewer queries into deterministic clinical checks, applies protocol rules,
+    and returns exact answers backed by verified RecordRefs.
     """
-    def __init__(self, graph: StudyGraph):
-        self.graph = graph
 
-    def answer(self, question: Any) -> Any:
-        raise NotImplementedError("Atlas question answering is deferred to the next phase.")
+    def __init__(self, graph: StudyGraph, rules: Optional[ProtocolRules] = None):
+        self.graph = graph
+        self.rules = rules or ProtocolRules.for_cut(getattr(graph, "cut", None))
+        self.clinical = ClinicalReasoning(graph, self.rules)
+        self.validator = EvidenceValidator(graph)
+
+    def answer(self, question: Union[Question, Dict[str, Any]]) -> Answer:
+        """Answers a clinical query citing verified record evidence.
+        
+        Supports all four question categories:
+        - count: integer answers with supporting records
+        - lookup: lists of record references within specified windows
+        - finding: candidate subject IDs backed by laboratory or safety records
+        - trap: returns [] when nothing meets criteria, without inventing evidence
+        """
+        # 1. Unpack Question
+        if isinstance(question, Question):
+            qid = question.question_id
+            text = question.text
+            kind = question.kind
+        elif isinstance(question, dict):
+            qid = question.get("question_id", "Q000")
+            text = question.get("text", "")
+            kind = question.get("kind")
+        else:
+            qid = getattr(question, "question_id", "Q000")
+            text = getattr(question, "text", str(question))
+            kind = getattr(question, "kind", None)
+
+        text_lower = text.lower()
+
+        # 2. Extract Entities
+        site_match = re.search(r"\b(s\d{2})\b", text, re.IGNORECASE)
+        site_filter = site_match.group(1).upper() if site_match else None
+
+        subj_match = re.search(r"\b(\d{3}-s\d{2}-\d{3})\b", text, re.IGNORECASE)
+        subj_filter = subj_match.group(1) if subj_match else None
+
+        visit_match = re.search(r"\b(screening|baseline|week\s*\d+|end\s+of\s+study|eos)\b", text, re.IGNORECASE)
+        visit_filter = visit_match.group(1).upper().replace(" ", "") if visit_match else None
+
+        window_match = re.search(r"within\s+(\d+)\s+days", text, re.IGNORECASE)
+        window_days = int(window_match.group(1)) if window_match else 7
+
+        is_count_query = (
+            kind == "count"
+            or text_lower.startswith("how many")
+            or "count of" in text_lower
+            or "number of" in text_lower
+        )
+
+        steps_used = 2
+
+        # 3. Deterministic Clinical Operation Selection
+        # A. Hy's Law / Liver Safety
+        if "hy's law" in text_lower or "hys law" in text_lower or "liver" in text_lower:
+            steps_used = 6
+            res = self.clinical.detect_hys_law_candidates(
+                site_filter=site_filter,
+                subject_filter=subj_filter
+            )
+            candidates = res["candidates"]
+            if is_count_query:
+                ans_val: Any = len(candidates)
+            else:
+                ans_val = candidates
+
+            ans_text = res["text"]
+            raw_evidence = res["evidence"]
+            confidence = res["confidence"]
+
+        # B. Dosing Deviations / Wrong Dose
+        elif "dose" in text_lower or "dosing" in text_lower:
+            steps_used = 4
+            res = self.clinical.detect_dosing_errors(site_filter=site_filter)
+            err_subjs = res["subjects"]
+            if is_count_query:
+                ans_val = res["count"]
+            else:
+                ans_val = err_subjs
+
+            ans_text = res["text"]
+            raw_evidence = res["evidence"]
+            confidence = res["confidence"]
+
+        # C. Discontinuations due to Adverse Events
+        elif "discontinu" in text_lower and ("adverse" in text_lower or "ae" in text_lower):
+            steps_used = 4
+            res = self.clinical.detect_discontinuations_by_ae(site_filter=site_filter)
+            disc_subjs = res["subjects"]
+            if is_count_query:
+                ans_val = res["count"]
+            else:
+                ans_val = disc_subjs
+
+            ans_text = res["text"]
+            raw_evidence = res["evidence"]
+            confidence = res["confidence"]
+
+        # D. Prohibited Concomitant Medications
+        elif "prohibited" in text_lower or "medication" in text_lower or "concomitant" in text_lower or "sulfonylurea" in text_lower or "glucocorticoid" in text_lower:
+            steps_used = 4
+            res = self.clinical.detect_prohibited_medications(site_filter=site_filter)
+            violators = res["subjects"]
+            if is_count_query:
+                ans_val = res["count"]
+            else:
+                ans_val = violators
+
+            ans_text = res["text"]
+            raw_evidence = res["evidence"]
+            confidence = res["confidence"]
+
+        # E. Serious Adverse Events / Hospitalization
+        elif "serious" in text_lower or "hospital" in text_lower:
+            steps_used = 4
+            res = self.clinical.detect_serious_adverse_events(site_filter=site_filter)
+            sae_subjs = res["subjects"]
+            if is_count_query:
+                ans_val = res["count"]
+            else:
+                ans_val = sae_subjs
+
+            ans_text = res["text"]
+            raw_evidence = res["evidence"]
+            confidence = res["confidence"]
+
+        # F. Lookup of records near visit
+        elif (
+            ("list" in text_lower or "find" in text_lower or "lookup" in text_lower or kind == "lookup")
+            and subj_filter
+            and visit_filter
+        ):
+            steps_used = 5
+            target_domains = []
+            if "lab" in text_lower or "laboratory" in text_lower:
+                target_domains.append("LB")
+            if "adverse" in text_lower or "ae" in text_lower:
+                target_domains.append("AE")
+            if "dose" in text_lower or "exposure" in text_lower:
+                target_domains.append("EX")
+            if not target_domains:
+                target_domains = ["LB", "AE"]
+
+            res = self.clinical.lookup_records_near_visit(
+                usubjid=subj_filter,
+                visit_name=visit_filter,
+                window_days=window_days,
+                domains=target_domains,
+            )
+            ans_val = res["answer"]
+            ans_text = res["text"]
+            raw_evidence = res["evidence"]
+            confidence = res["confidence"]
+
+        # G. General Count / Discontinuation query
+        elif is_count_query and "subject" in text_lower:
+            steps_used = 3
+            matched_subjs = []
+            for sub, sdata in self.graph.subjects.items():
+                if site_filter and sdata.get("site_id") != site_filter:
+                    continue
+                matched_subjs.append(sub)
+            ans_val = len(matched_subjs)
+            ans_text = f"{len(matched_subjs)} subjects at site {site_filter or 'all sites'}."
+            raw_evidence = [{"domain": "DM", "usubjid": s, "seq": 1} for s in matched_subjs]
+            confidence = 0.95
+
+        # H. Honest Trap / Fallback
+        else:
+            steps_used = 2
+            ans_val = []
+            ans_text = "No records or criteria match the requested query."
+            raw_evidence = []
+            confidence = 0.85
+
+        # 4. Evidence Validation & Deduplication
+        verified_evidence = self.validator.validate_and_deduplicate(raw_evidence)
+
+        # 5. Return Validated Answer Schema
+        return Answer(
+            question_id=qid,
+            answer=ans_val,
+            text=ans_text,
+            evidence=verified_evidence,
+            confidence=confidence,
+            steps_used=steps_used,
+            tokens_used=0,
+        )
+
+
+def main():
+    """CLI entrypoint for running Stage 1 - ATLAS."""
+    parser = argparse.ArgumentParser(description="Stage 1 - ATLAS StudyGraph & Answer Engine")
+    parser.add_argument("--data", type=str, required=True, help="Path to study data directory")
+    parser.add_argument("--cut", type=int, default=None, help="Data cut to build (1 to 12)")
+    parser.add_argument("--output-stats", type=str, default="graph_stats.json", help="Path to output build stats")
+    parser.add_argument("--output-answers", type=str, default="stage1_public.json", help="Path to output public answers")
+    args = parser.parse_args()
+
+    print(f"Loading StudyGraph from: {args.data} (Cut: {args.cut})")
+    graph = StudyGraph(args.data)
+    stats = graph.build(args.cut)
+    print(f"Graph built successfully in {stats['build_time_ms']} ms:")
+    print(f"  Nodes: {stats['nodes']}")
+    print(f"  Edges: {stats['edges']}")
+    print(f"  Subjects: {stats['subjects']}")
+
+    with open(args.output_stats, "w", encoding="utf-8") as f:
+        json.dump(stats, f, indent=2)
+    print(f"Saved build statistics to {args.output_stats}")
+
+    # Standard public test question suite
+    public_questions = [
+        Question("Q001", "How many subjects at site S07 discontinued due to an adverse event?", kind="count"),
+        Question("Q002", "How many subjects at site S11 discontinued due to an adverse event?", kind="count"),
+        Question("Q003", "List the laboratory and adverse-event records for 042-S05-003 within 7 days of the WEEK8 visit", kind="lookup"),
+        Question("Q004", "Which subjects meet potential Hy's law criteria?", kind="finding"),
+        Question("Q005", "Which subjects at site S07 meet potential Hy's law criteria?", kind="finding"),
+        Question("Q006", "Which subjects at site S01 received a wrong dose?", kind="trap"),
+        Question("Q007", "Which subjects at site S09 received a wrong dose?", kind="finding"),
+        Question("Q008", "Which subjects took prohibited concomitant medications?", kind="finding"),
+        Question("Q009", "Which subjects at site S05 have serious adverse events?", kind="finding"),
+        Question("Q010", "Which subjects at site S02 received a wrong dose?", kind="trap"),
+    ]
+
+    atlas = Atlas(graph)
+    answers = []
+    print("\nAnswering public questions:")
+    for q in public_questions:
+        ans = atlas.answer(q)
+        ans_dict = ans.to_dict()
+        answers.append(ans_dict)
+        print(f"  [{q.question_id}] Answer: {ans.answer} | Evidence count: {len(ans.evidence)}")
+
+    with open(args.output_answers, "w", encoding="utf-8") as f:
+        json.dump(answers, f, indent=2)
+    print(f"Saved public answers to {args.output_answers}")
+
+
+if __name__ == "__main__":
+    main()

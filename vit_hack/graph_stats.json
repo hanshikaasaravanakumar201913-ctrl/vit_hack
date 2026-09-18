@@ -1,0 +1,9 @@
+{
+  "nodes": 29578,
+  "edges": 29566,
+  "subjects": 241,
+  "subjects_covered": 241,
+  "cut": null,
+  "build_time_ms": 216.88,
+  "ms": 216.88
+}
