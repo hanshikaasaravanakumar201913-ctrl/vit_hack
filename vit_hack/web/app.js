@@ -421,18 +421,73 @@ document.addEventListener("DOMContentLoaded", () => {
     safe = safe.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     safe = safe.replace(/\*([^*]+)\*/g, "<em>$1</em>");
 
-    // Process lines for lists, callouts, and paragraphs
+    // Process lines for lists, callouts, tables, and paragraphs
     const lines = safe.split("\n");
     let inUl = false;
     let inOl = false;
+    let inTable = false;
+    let tableRows = [];
     const output = [];
+
+    function flushTable() {
+      if (!inTable || tableRows.length === 0) {
+        inTable = false;
+        tableRows = [];
+        return;
+      }
+      let html = '<div class="table-responsive" style="margin: 10px 0; overflow-x: auto;"><table class="clinical-data-table">';
+      if (tableRows.length >= 2 && tableRows[1].isSeparator) {
+        html += '<thead><tr>';
+        for (const cell of tableRows[0].cells) {
+          html += `<th>${cell}</th>`;
+        }
+        html += '</tr></thead><tbody>';
+        for (let r = 2; r < tableRows.length; r++) {
+          html += '<tr>';
+          for (const cell of tableRows[r].cells) {
+            html += `<td>${cell}</td>`;
+          }
+          html += '</tr>';
+        }
+        html += '</tbody>';
+      } else {
+        html += '<tbody>';
+        for (let r = 0; r < tableRows.length; r++) {
+          if (tableRows[r].isSeparator) continue;
+          html += '<tr>';
+          for (const cell of tableRows[r].cells) {
+            html += `<td>${cell}</td>`;
+          }
+          html += '</tr>';
+        }
+        html += '</tbody>';
+      }
+      html += '</table></div>';
+      output.push(html);
+      inTable = false;
+      tableRows = [];
+    }
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) {
+        if (inTable) flushTable();
         if (inUl) { output.push("</ul>"); inUl = false; }
         if (inOl) { output.push("</ol>"); inOl = false; }
         continue;
+      }
+
+      // Markdown Table
+      if (line.startsWith("|") && line.endsWith("|")) {
+        if (inUl) { output.push("</ul>"); inUl = false; }
+        if (inOl) { output.push("</ol>"); inOl = false; }
+        const rawCells = line.slice(1, -1).split("|").map(c => c.trim());
+        const isSep = rawCells.every(c => /^:?-+:?$/.test(c));
+        if (!inTable) { inTable = true; tableRows = []; }
+        tableRows.push({ cells: rawCells, isSeparator: isSep });
+        continue;
+      } else if (inTable) {
+        flushTable();
       }
 
       // Unordered list
@@ -482,6 +537,7 @@ document.addEventListener("DOMContentLoaded", () => {
       output.push(`<p>${line}</p>`);
     }
 
+    if (inTable) flushTable();
     if (inUl) output.push("</ul>");
     if (inOl) output.push("</ol>");
 
@@ -627,6 +683,8 @@ document.addEventListener("DOMContentLoaded", () => {
       followup_suggestions = [],
       active_subject,
       latency_ms = 15.0,
+      intent_category = "",
+      intent = "",
     } = data;
 
     const formattedContent = formatMarkdown(message);
@@ -694,14 +752,18 @@ document.addEventListener("DOMContentLoaded", () => {
       `;
     }
 
+    const displayCategory = intent_category || intent || "";
+    const categoryBadge = displayCategory ? `<span style="display: inline-block; font-size: 0.68rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; background: #F1F5F9; color: #475569; border: 1px solid #CBD5E1; padding: 1px 6px; border-radius: 4px; vertical-align: middle;">${escapeHtml(displayCategory)}</span>` : "";
+
     const msgDiv = document.createElement("div");
     msgDiv.className = "chat-message assistant-message";
     msgDiv.innerHTML = `
       <div class="msg-avatar">ATLAS</div>
       <div class="msg-body">
-        <div class="msg-author-row">
+        <div class="msg-author-row" style="display: flex; align-items: center; gap: 8px;">
           <span class="msg-author-name">ATLAS Clinical Assistant</span>
-          <span class="msg-time">Grounded in STUDY-042 Graph • ${Math.round(latency_ms)}ms</span>
+          ${categoryBadge}
+          <span class="msg-time" style="margin-left: auto;">Grounded in STUDY-042 Graph • ${Math.round(latency_ms)}ms</span>
         </div>
         <div class="msg-content">
           ${formattedContent}
@@ -2872,7 +2934,7 @@ document.addEventListener("DOMContentLoaded", () => {
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
             <span>Ask ATLAS About This Subject</span>
           </button>
-          <button class="btn-ask-patient" id="btn-view-graph-subj" style="background: rgba(0, 242, 254, 0.12); border-color: rgba(0, 242, 254, 0.35); color: var(--cyan-primary);">
+          <button class="btn-ask-patient" id="btn-view-graph-subj" style="background: rgba(37, 99, 235, 0.08); border-color: rgba(37, 99, 235, 0.25); color: #2563EB;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"></circle><path d="M3 12h3m12 0h3m-9-9v3m0 12v3"></path></svg>
             <span>View Connected Knowledge Graph</span>
           </button>

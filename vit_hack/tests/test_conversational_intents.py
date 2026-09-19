@@ -47,7 +47,8 @@ class TestConversationalIntents(unittest.TestCase):
     # -------------------------------------------------------------------------
     def test_casual_greeting_hello(self):
         res = self.orchestrator.chat("Hello", conversation_id="conv-greet-1")
-        self.assertEqual(res["intent"], "CASUAL_CONVERSATION")
+        self.assertIn(res["intent"], ("GREETING", "CASUAL_CONVERSATION"))
+        self.assertEqual(res["intent_category"], "GREETING")
         self.assertIn("ATLAS", res["message"])
         self.assertNotIn("No records met", res["message"])
         self.assertEqual(len(res["evidence"]), 0)
@@ -55,7 +56,8 @@ class TestConversationalIntents(unittest.TestCase):
 
     def test_casual_greeting_hi(self):
         res = self.orchestrator.chat("Hi there!", conversation_id="conv-greet-2")
-        self.assertEqual(res["intent"], "CASUAL_CONVERSATION")
+        self.assertIn(res["intent"], ("GREETING", "CASUAL_CONVERSATION"))
+        self.assertEqual(res["intent_category"], "GREETING")
         self.assertIn("ATLAS", res["message"])
         self.assertNotIn("No records met", res["message"])
 
@@ -202,6 +204,106 @@ class TestConversationalIntents(unittest.TestCase):
         self.assertEqual(res["intent"], "OUT_OF_SCOPE")
         self.assertIn("ATLAS specializes strictly in STUDY-042", res["message"])
         self.assertTrue(len(res["followup_suggestions"]) >= 3)
+
+    # -------------------------------------------------------------------------
+    # 6. Comprehensive 14 Conversational Flows (Section 19 Benchmark)
+    # -------------------------------------------------------------------------
+    def test_conv_1_greeting_hi(self):
+        res = self.orchestrator.chat("hi", conversation_id="conv-bench-1")
+        self.assertEqual(res["intent_category"], "GREETING")
+        self.assertIn("ATLAS", res["message"])
+        self.assertNotIn("No records met", res["message"])
+        self.assertEqual(len(res["evidence"]), 0)
+
+    def test_conv_2_candy_dietary(self):
+        res = self.orchestrator.chat("can I eat a candy?", conversation_id="conv-bench-2")
+        self.assertEqual(res["intent_category"], "CASUAL_CONVERSATION")
+        self.assertNotIn("No records met", res["message"])
+        self.assertIn("STUDY-042", res["message"])
+        self.assertIn("glycemic", res["message"].lower())
+
+    def test_conv_3_general_knowledge_placebo(self):
+        res = self.orchestrator.chat("what is a placebo?", conversation_id="conv-bench-3")
+        self.assertEqual(res["intent_category"], "GENERAL_KNOWLEDGE")
+        self.assertNotIn("No records met", res["message"])
+        self.assertIn("Placebo in Clinical Trials", res["message"])
+        self.assertIn("STUDY-042", res["message"])
+        self.assertIn("0 mg", res["message"])
+
+    def test_conv_4_mortality_query(self):
+        res = self.orchestrator.chat("how many people died?", conversation_id="conv-bench-4")
+        self.assertEqual(res["intent_category"], "SAFETY_QUERY")
+        self.assertNotIn("No records met", res["message"])
+        self.assertIn("zero reported deaths", res["message"].lower())
+        self.assertIn("241", res["message"])
+
+    def test_conv_5_hospitalization_clarification(self):
+        res = self.orchestrator.chat("how many are currently admitted?", conversation_id="conv-bench-5")
+        self.assertEqual(res["intent_category"], "AMBIGUOUS")
+        self.assertNotIn("No records met", res["message"])
+        self.assertIn("hospitalized", res["message"].lower())
+        self.assertIn("AESHOSP", res["message"])
+
+    def test_conv_6_to_9_subject_followup_chain(self):
+        conv_id = "conv-bench-chain"
+        # Turn 1: Tell me about subject 042-S07-001
+        res1 = self.orchestrator.chat("Tell me about subject 042-S07-001", conversation_id=conv_id)
+        self.assertEqual(res1["intent_category"], "PATIENT_QUERY")
+        self.assertIn("042-S07-001", res1["message"])
+        self.assertIn("Site S07", res1["message"])
+
+        # Turn 2: What medications were they taking?
+        res2 = self.orchestrator.chat("What medications were they taking?", conversation_id=conv_id)
+        self.assertEqual(res2["intent_category"], "FOLLOW_UP")
+        self.assertIn("042-S07-001", res2["message"])
+        self.assertIn("Glibenclamide", res2["message"])
+
+        # Turn 3: What about their liver?
+        res3 = self.orchestrator.chat("What about their liver?", conversation_id=conv_id)
+        self.assertEqual(res3["intent_category"], "SAFETY_QUERY")
+        self.assertIn("042-S07-001", res3["message"])
+        self.assertIn("ALT", res3["message"])
+
+        # Turn 4: Was that serious?
+        res4 = self.orchestrator.chat("Was that serious?", conversation_id=conv_id)
+        self.assertEqual(res4["intent_category"], "FOLLOW_UP")
+        self.assertIn("042-S07-001", res4["message"])
+        self.assertIn("serious", res4["message"].lower())
+
+    def test_conv_10_cohort_dosing_deviations(self):
+        res = self.orchestrator.chat("Which subjects at site S09 received a wrong dose?", conversation_id="conv-bench-10")
+        self.assertEqual(res["intent_category"], "COHORT_QUERY")
+        self.assertNotIn("No records met", res["message"])
+        self.assertIn("S09", res["message"])
+
+    def test_conv_11_protocol_amendment(self):
+        res = self.orchestrator.chat("What changed in the latest protocol amendment?", conversation_id="conv-bench-11")
+        self.assertEqual(res["intent_category"], "PROTOCOL_QUERY")
+        self.assertIn("Amendment", res["message"])
+
+    def test_conv_12_cohort_hys_law(self):
+        res = self.orchestrator.chat("Which subjects meet potential Hy's law criteria?", conversation_id="conv-bench-12")
+        self.assertEqual(res["intent_category"], "SAFETY_QUERY")
+        self.assertIn("042-S07-001", res["message"])
+        self.assertIn("042-S05-003", res["message"])
+
+    def test_conv_13_fact_check(self):
+        conv_id = "conv-bench-13"
+        self.orchestrator.chat("Tell me about subject 042-S07-001", conversation_id=conv_id)
+        res = self.orchestrator.chat("Fact check this finding", conversation_id=conv_id)
+        self.assertEqual(res["intent_category"], "FACT_CHECK")
+        self.assertIn("042-S07-001", res["message"])
+
+    def test_conv_14_out_of_scope_pizza(self):
+        res = self.orchestrator.chat("Who invented pizza?", conversation_id="conv-bench-14")
+        self.assertEqual(res["intent_category"], "OUT_OF_SCOPE")
+        self.assertIn("pizza", res["message"].lower())
+        self.assertIn("ATLAS specializes strictly in STUDY-042", res["message"])
+
+    def test_conv_15_ambiguous_without_subject(self):
+        res = self.orchestrator.chat("Tell me about that subject", conversation_id="conv-bench-15")
+        self.assertEqual(res["intent_category"], "AMBIGUOUS")
+        self.assertIn("specify", res["message"].lower())
 
 
 if __name__ == "__main__":

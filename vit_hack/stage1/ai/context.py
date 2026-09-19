@@ -33,6 +33,10 @@ class ConversationContext:
     
     # Clinical investigation context
     last_finding_type: Optional[str] = None
+    last_finding_summary: Optional[str] = None
+    last_topic: Optional[str] = None
+    last_ae_term: Optional[str] = None
+    last_ae_seriousness: Optional[str] = None
     last_intent: Optional[str] = None
     last_protocol_version: int = 3
     last_cut: Optional[int] = 12
@@ -79,9 +83,10 @@ class ConversationContext:
         
         Examples:
         - "What about their liver results?" -> resolves "their" to active_subject.
+        - "What medications were they taking?" -> resolves "they" to active_subject.
+        - "Was that serious?" -> resolves "that" to last adverse event or finding.
         - "Why was this patient flagged?" -> resolves "this patient" to active_subject.
         - "Show me the records" -> resolves to active_records from previous turn.
-        - "Was that serious?" -> resolves to last adverse event or finding.
         """
         resolved_entities: Dict[str, Any] = {}
         text = query_text.strip()
@@ -103,10 +108,20 @@ class ConversationContext:
                 "compare screening labs", "compare baseline labs", "compare their screening",
                 "patient compliant", "subject compliant", "compliant with the protocol",
                 "medications relevant", "medication relevant", "relevant to the current finding",
+                "was that serious", "is that serious", "was it serious", "is that dangerous",
+                "what medications were they taking", "what did they take",
             ]
             if re.search(pronoun_pattern, text_lower) or any(k in text_lower for k in followup_triggers):
                 resolved_entities["subject"] = self.active_subject
                 resolved_entities["resolved_via_context"] = True
+
+            # Check for demonstrative inquiry ("was that serious?", "is that serious?")
+            if re.search(r"\b(was that|is that|was it|is it)\s+(serious|dangerous|severe|fatal|expected|normal)\b", text_lower):
+                resolved_entities["subject"] = self.active_subject
+                resolved_entities["resolved_via_context"] = True
+                resolved_entities["seriousness_inquiry"] = True
+                if self.last_finding_type:
+                    resolved_entities["referenced_finding_type"] = self.last_finding_type
 
         # 2. Domain / Finding References
         if any(w in text_lower for w in ["liver", "alt", "ast", "bilirubin", "hy's law", "hys law"]):

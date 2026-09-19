@@ -202,13 +202,55 @@ class DeterministicClinicalProvider(AIProvider):
         if direct_text:
             return direct_text
 
+        # Intent: GREETING
+        if intent == "GREETING":
+            return (
+                "Hello! I'm ATLAS, your clinical study assistant. I can help you investigate study subjects, "
+                "clinical records, safety signals, protocol requirements, monitoring issues, and evidence from STUDY-042. "
+                "What would you like to explore?"
+            )
+
+        # Intent: CASUAL_CONVERSATION
+        if intent == "CASUAL_CONVERSATION":
+            from stage1.ai.prompts import CANDY_DIETARY_RESPONSE
+            sub_type = context_data.get("sub_type", "")
+            if sub_type == "CANDY_DIETARY":
+                return CANDY_DIETARY_RESPONSE
+            return direct_text or (
+                "I'm here and ready to assist with your STUDY-042 clinical review. "
+                "You can ask about study subjects, safety findings, protocol rules, or monitoring escalations."
+            )
+
+        # Intent: GENERAL_KNOWLEDGE
+        if intent == "GENERAL_KNOWLEDGE":
+            return direct_text
+
+        # Intent: MORTALITY_QUERY
+        if intent == "MORTALITY_QUERY":
+            from stage1.ai.prompts import MORTALITY_RESPONSE
+            return direct_text or MORTALITY_RESPONSE
+
+        # Intent: HOSPITALIZATION_CLARIFICATION
+        if intent == "HOSPITALIZATION_CLARIFICATION":
+            from stage1.ai.prompts import HOSPITALIZATION_CLARIFICATION_RESPONSE
+            return direct_text or HOSPITALIZATION_CLARIFICATION_RESPONSE
+
+        # Intent: PLACEBO_DOSE_STUDY042
+        if intent == "PLACEBO_DOSE_STUDY042":
+            from stage1.ai.prompts import PLACEBO_DOSE_STUDY042_RESPONSE
+            return direct_text or PLACEBO_DOSE_STUDY042_RESPONSE
+
+        # Intent: FOLLOWUP_SERIOUSNESS
+        if intent == "FOLLOWUP_SERIOUSNESS":
+            return direct_text
+
         # Intent: OUT_OF_SCOPE
         if intent == "OUT_OF_SCOPE":
             from stage1.ai.prompts import OUT_OF_SCOPE_MESSAGE
-            return OUT_OF_SCOPE_MESSAGE
+            return direct_text or OUT_OF_SCOPE_MESSAGE
 
         # Intent: CLARIFICATION_NEEDED
-        if intent == "CLARIFICATION_NEEDED":
+        if intent in ("CLARIFICATION_NEEDED", "AMBIGUOUS"):
             from stage1.ai.prompts import CLARIFICATION_NO_SUBJECT_MESSAGE
             return context_data.get("clarification_question", CLARIFICATION_NO_SUBJECT_MESSAGE)
 
