@@ -95,9 +95,16 @@ class ConversationContext:
             resolved_entities["subject"] = subj_id
             resolved_entities["explicit_subject"] = True
         elif self.active_subject:
-            # Check for pronouns: "their", "they", "this patient", "that patient", "this subject", "that subject", "the patient"
+            # Check for pronouns or conversational continuity triggers
             pronoun_pattern = r"\b(their|they|them|he|she|him|her|this patient|that patient|the patient|this subject|that subject|the subject)\b"
-            if re.search(pronoun_pattern, text_lower) or any(k in text_lower for k in ["what happened to", "what about", "why was", "why were"]):
+            followup_triggers = [
+                "what happened to", "what about", "why was", "why were",
+                "before the adverse event", "before the ae", "prior to the adverse event",
+                "compare screening labs", "compare baseline labs", "compare their screening",
+                "patient compliant", "subject compliant", "compliant with the protocol",
+                "medications relevant", "medication relevant", "relevant to the current finding",
+            ]
+            if re.search(pronoun_pattern, text_lower) or any(k in text_lower for k in followup_triggers):
                 resolved_entities["subject"] = self.active_subject
                 resolved_entities["resolved_via_context"] = True
 

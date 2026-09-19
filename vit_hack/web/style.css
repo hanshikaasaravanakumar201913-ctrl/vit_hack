@@ -2933,18 +2933,50 @@ code, kbd, pre {
   background: #FEF2F2;
 }
 
-/* Evidence Cards Grid inside Assistant Message */
-.chat-evidence-section {
+/* Progressive Disclosure Evidence Accordion inside Assistant Message */
+.chat-evidence-details {
   margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-light);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: #FAFAFA;
+  overflow: hidden;
+  transition: all var(--transition-fast);
 }
 
-.chat-evidence-header {
+.chat-evidence-details[open] {
+  background: #FFFFFF;
+  border-color: var(--border-medium);
+}
+
+.chat-evidence-summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: #F8FAFC;
+  border-bottom: 1px solid transparent;
+  transition: background var(--transition-fast);
+  list-style: none;
+}
+
+.chat-evidence-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-evidence-details[open] .chat-evidence-summary {
+  border-bottom-color: var(--border-light);
+}
+
+.chat-evidence-summary:hover {
+  background: #F1F5F9;
+}
+
+.evidence-toggle-hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 500;
 }
 
 .chat-evidence-title {
@@ -2962,6 +2994,7 @@ code, kbd, pre {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 10px;
+  padding: 12px;
 }
 
 .chat-evidence-card {

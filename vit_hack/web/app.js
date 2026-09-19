@@ -660,18 +660,20 @@ document.addEventListener("DOMContentLoaded", () => {
         `;
       }).join("");
 
+      const recordsText = evidence.length === 1 ? "record" : "records";
       evidenceHtml = `
-        <div class="chat-evidence-section">
-          <div class="chat-evidence-header">
+        <details class="chat-evidence-details" open>
+          <summary class="chat-evidence-summary">
             <span class="chat-evidence-title">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-              <span>CDISC SDTM Ground-Truth Evidence (${evidence.length} Records)</span>
+              <span>Evidence · ${evidence.length} ${recordsText}</span>
             </span>
-          </div>
+            <span class="evidence-toggle-hint">Click to toggle</span>
+          </summary>
           <div class="chat-evidence-grid">
             ${cardsHtml}
           </div>
-        </div>
+        </details>
       `;
     }
 
@@ -1555,6 +1557,7 @@ document.addEventListener("DOMContentLoaded", () => {
     desc,
     stats = [],
     customHtml = "",
+    record = null,
     actionText,
     actionQuery,
     onActionClick,
@@ -1585,6 +1588,36 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (inspActions) {
       inspActions.innerHTML = "";
+
+      if (record) {
+        const viewRecBtn = document.createElement("button");
+        viewRecBtn.type = "button";
+        viewRecBtn.className = "btn-insp-action";
+        viewRecBtn.style.marginBottom = "6px";
+        viewRecBtn.textContent = "[View full record]";
+        viewRecBtn.addEventListener("click", () => {
+          showCdiscRecordModal(record);
+        });
+        inspActions.appendChild(viewRecBtn);
+
+        const askAtlasBtn = document.createElement("button");
+        askAtlasBtn.type = "button";
+        askAtlasBtn.className = "btn-insp-action";
+        askAtlasBtn.style.background = "var(--blue-subtle)";
+        askAtlasBtn.style.color = "var(--blue-text)";
+        askAtlasBtn.style.border = "1px solid var(--blue-border)";
+        askAtlasBtn.style.marginBottom = "6px";
+        const recDom = record.domain || record.DOMAIN || (type ? type.split("[")[1]?.split("]")[0] : "LB") || "LB";
+        const recSubj = record.usubjid || record.USUBJID || (graphState.patient && graphState.patient.usubjid) || "042-S07-001";
+        const recSeq = record.seq || record.SEQ || record.LBSEQ || record.AESEQ || record.EXSEQ || record.CMSEQ || "1";
+        const recTest = record.test || record.LBTESTCD || record.AETERM || record.EXTRT || record.CMTRT || "assessment";
+        askAtlasBtn.textContent = `[Ask ATLAS about this ${recDom}]`;
+        askAtlasBtn.addEventListener("click", () => {
+          switchTab("ask");
+          executeChat(`Explain the clinical significance of ${recDom} record seq ${recSeq} (${recTest}) for subject ${recSubj}`);
+        });
+        inspActions.appendChild(askAtlasBtn);
+      }
 
       if (actionText) {
         const actBtn = document.createElement("button");
@@ -2162,6 +2195,7 @@ document.addEventListener("DOMContentLoaded", () => {
         badgeBg: isElev ? "#FEF2F2" : "#ECFDF5",
         data: {
           inspector: {
+            record: altRec,
             type: "LABORATORY TEST [ALT]",
             title: `Alanine Aminotransferase (ALT) = ${altRec.LBORRES} ${altRec.LBORRESU}`,
             desc: `Serum ALT assessment at ${altRec.VISIT} on date ${altRec.LBDTC}. ${
@@ -2203,6 +2237,7 @@ document.addEventListener("DOMContentLoaded", () => {
         badgeBg: isElev ? "#FEF2F2" : "#ECFDF5",
         data: {
           inspector: {
+            record: astRec,
             type: "LABORATORY TEST [AST]",
             title: `Aspartate Aminotransferase (AST) = ${astRec.LBORRES} ${astRec.LBORRESU}`,
             desc: `Serum AST assessment at ${astRec.VISIT} on date ${astRec.LBDTC}.`,
@@ -2238,6 +2273,7 @@ document.addEventListener("DOMContentLoaded", () => {
         badgeBg: isElev ? "#FEF2F2" : "#ECFDF5",
         data: {
           inspector: {
+            record: biliRec,
             type: "LABORATORY TEST [BILI]",
             title: `Total Bilirubin (BILI) = ${biliRec.LBORRES} ${biliRec.LBORRESU}`,
             desc: `Total Bilirubin assessment at ${biliRec.VISIT} on date ${biliRec.LBDTC}. Normal ULN is 1.2 mg/dL.`,
@@ -2269,6 +2305,7 @@ document.addEventListener("DOMContentLoaded", () => {
         sublabel: `${hba1cRec.LBORRES}%`,
         data: {
           inspector: {
+            record: hba1cRec,
             type: "LABORATORY TEST [HBA1C]",
             title: `Hemoglobin A1c (HbA1c) = ${hba1cRec.LBORRES}%`,
             desc: `Glycated hemoglobin efficacy biomarker assessed at ${hba1cRec.VISIT}.`,
@@ -2380,6 +2417,7 @@ document.addEventListener("DOMContentLoaded", () => {
         sublabel: ex1.EXTRT || "DRUG",
         data: {
           inspector: {
+            record: ex1,
             type: "EXPOSURE RECORD",
             title: `Administered Dose: ${ex1.EXDOSE} mg`,
             desc: `Investigational treatment administered at ${ex1.VISIT} on date ${ex1.EXSTDTC}.`,
@@ -2480,6 +2518,7 @@ document.addEventListener("DOMContentLoaded", () => {
         sublabel: dsRecords[0].DSSTDTC || "Day 168",
         data: {
           inspector: {
+            record: dsRecords[0],
             type: "DISPOSITION RECORD",
             title: `Disposition Milestone: ${dsRecords[0].DSDECOD}`,
             desc: dsRecords[0].DSTERM || "Completed scheduled protocol participation.",
@@ -2620,6 +2659,7 @@ document.addEventListener("DOMContentLoaded", () => {
           badgeBg: isSae ? "#FEF2F2" : "#FFFBEB",
           data: {
             inspector: {
+              record: ae,
               type: `ADVERSE EVENT RECORD ${isSae ? "(SERIOUS / HOSPITALIZED)" : ""}`,
               title: `${ae.AETERM || "Adverse Event"} (${ae.AESEV || "Grade 1"})`,
               desc: isHosp
@@ -2707,6 +2747,7 @@ document.addEventListener("DOMContentLoaded", () => {
         badgeBg: isProh ? "#FEF2F2" : "#F5F3FF",
         data: {
           inspector: {
+            record: cm1,
             type: `CONCOMITANT MEDICATION RECORD [CM] ${isProh ? "(PROHIBITED)" : ""}`,
             title: `${cm1.CMTRT || "Medication"} (${cm1.CMCLAS || "Concomitant"})`,
             desc: isProh
