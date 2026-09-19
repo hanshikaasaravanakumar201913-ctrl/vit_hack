@@ -27,8 +27,12 @@ class FindingType(str, Enum):
 
 class GateDecision(str, Enum):
     PENDING = "PENDING"
+    FACT_CHECK_REQUESTED = "FACT_CHECK_REQUESTED"
+    FACT_CHECK_COMPLETE = "FACT_CHECK_COMPLETE"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    MONITORING = "MONITORING"
+    EXECUTED = "EXECUTED"
     CLARIFY = "CLARIFY"
 
 
@@ -128,6 +132,13 @@ class Escalation:
     created_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.datetime.now(datetime.timezone.utc).isoformat())
 
+    # Human Medical Monitor & AI Review extensions
+    fact_check_query: Optional[str] = None
+    fact_check_result: Optional[Dict[str, Any]] = None
+    monitor_comments: List[Dict[str, Any]] = field(default_factory=list)
+    suggested_action: Optional[str] = None
+    medical_review_details: Dict[str, Any] = field(default_factory=dict)
+
     @property
     def key(self) -> str:
         return f"{self.finding_code}|{self.target_id}"
@@ -146,6 +157,11 @@ class Escalation:
             "gate_reason": self.gate_reason,
             "clarification_question": self.clarification_question,
             "clarification_response": self.clarification_response,
+            "fact_check_query": self.fact_check_query,
+            "fact_check_result": self.fact_check_result,
+            "monitor_comments": self.monitor_comments,
+            "suggested_action": self.suggested_action,
+            "medical_review_details": self.medical_review_details,
             "cycle": self.cycle,
             "created_at": self.created_at,
             "updated_at": self.updated_at,

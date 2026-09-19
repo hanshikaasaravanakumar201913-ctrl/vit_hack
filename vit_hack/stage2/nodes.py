@@ -255,6 +255,50 @@ def run_human_gate(ctx: CrewContext) -> None:
             continue
 
         title = f"{f.finding_type} Escalation: {f.usubjid}"
+
+        # Generate structured AI medical review details
+        med_details = {}
+        if f.finding_type == "SAE_MISCODED":
+            med_details = {
+                "why_detected": "Inpatient hospitalization recorded (AESHOSP = 'Y') but seriousness flagged as 'N' (AESER = 'N').",
+                "protocol_basis": "Protocol Section 6.1 & ICH E2A Guideline: Any event requiring inpatient admission is an SAE by definition.",
+                "ai_medical_review": "Hospitalization indicates substantial medical severity requiring inpatient intervention. Misclassification risks signal masking and safety non-compliance.",
+                "alternative_explanations": "Elective diagnostic workup or social respite admission without acute exacerbation.",
+                "recommended_next_investigation": "Retrieve hospital discharge summary to establish acute vs planned elective admission status.",
+            }
+        elif f.finding_type == "HYS_LAW_CANDIDATE":
+            med_details = {
+                "why_detected": "Concurrent ALT > 3× ULN and Total Bilirubin > 2× ULN within 14-day protocol window.",
+                "protocol_basis": "FDA Guidance on Drug-Induced Liver Injury (DILI) & Protocol Section 6.2.",
+                "ai_medical_review": "Concomitant transaminase elevation and hyperbilirubinemia without initial cholestasis indicates acute drug-induced hepatocellular necrosis.",
+                "alternative_explanations": "Acute viral hepatitis (HAV/HBV/HCV), biliary obstruction, or concomitant hepatotoxin ingestion.",
+                "recommended_next_investigation": "Fact check screening/baseline ALT, perform abdominal ultrasound, and review concomitant medications.",
+            }
+        elif f.finding_type == "DOSING_ERROR":
+            med_details = {
+                "why_detected": "Administered dose deviated from protocol-assigned randomized arm schedule.",
+                "protocol_basis": "Protocol Section 4: 10 mg Active vs 0 mg Placebo.",
+                "ai_medical_review": "Administering incorrect dose levels impacts efficacy assessment and introduces dose-dependent toxicity risks.",
+                "alternative_explanations": "Dispensation kit transcription error at clinical site pharmacy.",
+                "recommended_next_investigation": "Audit site pharmacy drug accountability log.",
+            }
+        elif f.finding_type == "PROHIBITED_MEDICATION":
+            med_details = {
+                "why_detected": f"Prohibited concomitant medication class administered under Protocol v{ctx.protocol_version}.",
+                "protocol_basis": f"Protocol v{ctx.protocol_version} Amendment Exclusionary Medications.",
+                "ai_medical_review": "Potential pharmacokinetic interaction with investigational product risking altered drug clearance or additive toxicity.",
+                "alternative_explanations": "Prior medication stopped prior to baseline but logged without stop date in eCRF.",
+                "recommended_next_investigation": "Contact site study coordinator to obtain precise start and stop dates.",
+            }
+        else:
+            med_details = {
+                "why_detected": f.description,
+                "protocol_basis": "Clinical trial monitoring plan.",
+                "ai_medical_review": "Systematic deviation requiring review.",
+                "alternative_explanations": "Data capture latency or transcription discrepancy.",
+                "recommended_next_investigation": "Verify source clinical documents.",
+            }
+
         esc = Escalation(
             id=f"ESC-{ctx.cycle:02d}-{len(escalations) + 1:03d}",
             finding_code=f.finding_type,
@@ -265,6 +309,7 @@ def run_human_gate(ctx: CrewContext) -> None:
             citations=f.citations,
             status=GateDecision.PENDING,
             cycle=ctx.cycle,
+            medical_review_details=med_details,
         )
 
         # Query Gateway for monitor decision

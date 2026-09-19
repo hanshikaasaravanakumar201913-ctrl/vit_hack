@@ -25,6 +25,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from stage1.atlas import Atlas, StudyGraph
+from stage1.ai import AtlasConversationalOrchestrator
 from starter.schemas import Question
 from stage2.crew import ReviewCrew
 from stage2.models import GateDecision
@@ -37,6 +38,7 @@ GRAPH: Optional[StudyGraph] = None
 ATLAS_ENGINE: Optional[Atlas] = None
 DATA_DIR_PATH: Optional[Path] = None
 REVIEW_CREW: Optional[ReviewCrew] = None
+AI_ORCHESTRATOR: Optional[AtlasConversationalOrchestrator] = None
 
 PUBLIC_DEMO_QUESTIONS = [
     {
@@ -141,6 +143,11 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
         elif path.startswith("/api/patient/"):
             usubjid = unquote(path[len("/api/patient/"):].strip())
             self._handle_patient(usubjid)
+        elif path.startswith("/api/conversation/"):
+            cid = unquote(path[len("/api/conversation/"):].strip())
+            self._handle_get_conversation(cid)
+        elif path.startswith("/api/graph/subject/"):
+            self._handle_graph_subject_domain(path)
         elif path == "/api/public-questions":
             self._send_json(PUBLIC_DEMO_QUESTIONS)
         elif path == "/api/monitor/status":
@@ -158,16 +165,22 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
             super().do_GET()
 
     def do_POST(self) -> None:
-        """Handle POST requests for clinical questions."""
+        """Handle POST requests for clinical questions, AI chat, and monitoring actions."""
         parsed_url = urlparse(self.path)
         path = parsed_url.path
 
-        if path == "/api/ask":
+        if path == "/api/chat":
+            self._handle_chat()
+        elif path == "/api/ask":
             self._handle_ask()
         elif path == "/api/monitor/cycle":
             self._handle_monitor_cycle()
         elif path == "/api/monitor/escalations/decision":
             self._handle_monitor_decision()
+        elif path == "/api/monitor/fact-check":
+            self._handle_monitor_fact_check()
+        elif path == "/api/monitor/comment":
+            self._handle_monitor_comment()
         else:
             self._send_json({"error": "Endpoint not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -554,6 +567,10 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
                 self._send_json({"error": f"Escalation {esc_id} not found"}, status=HTTPStatus.NOT_FOUND)
                 return
 
+            suggestion = body.get("suggestion", "").strip()
+            if suggestion:
+                target_esc.suggested_action = suggestion
+
             if decision == "APPROVED":
                 target_esc.status = GateDecision.APPROVED
                 target_esc.gate_reason = reason
@@ -572,10 +589,15 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
                     last_rep.rejected_escalations.append(target_esc)
                 REVIEW_CREW.memory.record_rejection(target_esc.key)
 
+            elif decision == "MONITORING":
+                target_esc.status = GateDecision.MONITORING
+                target_esc.gate_reason = reason
+                REVIEW_CREW.memory.record_rejection(target_esc.key)
+
             elif decision == "CLARIFY":
                 from stage2.escalations import resolve_monitor_clarification
                 question = body.get("question", target_esc.clarification_question or "What were the screening baseline transaminase values?")
-                resp_text = resolve_monitor_clarification(target_esc, REVIEW_CREW.atlas, question)
+                resp_text = resolve_monitor_clarification(GRAPH, target_esc.target_id, question)
                 target_esc.status = GateDecision.CLARIFY
                 target_esc.clarification_question = question
                 target_esc.clarification_response = resp_text
@@ -586,7 +608,12 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
                 cycle=REVIEW_CREW.cycle_count,
                 node="human_gate",
                 action="MANUAL_DECISION_OVERRIDE",
-                details={"escalation_id": esc_id, "decision": decision, "reason": reason}
+                details={
+                    "escalation_id": esc_id,
+                    "decision": decision,
+                    "reason": reason,
+                    "suggestion": suggestion,
+                },
             )
 
             self._send_json({"status": "updated", "escalation": target_esc.to_dict()})
@@ -594,10 +621,209 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
         except Exception as e:
             self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
 
+    def _handle_chat(self) -> None:
+        """POST /api/chat — Natural language conversational assistant endpoint."""
+        global AI_ORCHESTRATOR, GRAPH
+        if AI_ORCHESTRATOR is None or GRAPH is None:
+            self._send_json({"error": "AI Orchestrator not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json({"error": "Empty request body"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        raw_body = self.rfile.read(content_length)
+        try:
+            body = json.loads(raw_body.decode("utf-8"))
+        except Exception as e:
+            self._send_json({"error": f"Invalid JSON body: {e}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        message = body.get("message", "").strip()
+        if not message:
+            self._send_json({"error": "Missing 'message' parameter"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        conversation_id = body.get("conversation_id")
+        context_override = body.get("context", {})
+
+        try:
+            resp = AI_ORCHESTRATOR.process_message(
+                message=message,
+                conversation_id=conversation_id,
+                context_override=context_override,
+            )
+            self._send_json(resp)
+        except Exception as e:
+            logger.exception("Error in AI chat: %s", e)
+            self._send_json({"error": f"AI Orchestrator error: {e}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_get_conversation(self, cid: str) -> None:
+        """GET /api/conversation/{id} — Fetch multi-turn conversation session."""
+        global AI_ORCHESTRATOR
+        if AI_ORCHESTRATOR is None:
+            self._send_json({"error": "AI Orchestrator not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        conv = AI_ORCHESTRATOR.store.get(cid)
+        if not conv:
+            self._send_json({"error": f"Conversation '{cid}' not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+        self._send_json(conv.to_dict())
+
+    def _handle_monitor_fact_check(self) -> None:
+        """POST /api/monitor/fact-check — Real-time clinical fact check against StudyGraph."""
+        global REVIEW_CREW, GRAPH
+        if REVIEW_CREW is None or GRAPH is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json({"error": "Empty body"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            from stage2.escalations import execute_fact_check
+            body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            esc_id = body.get("escalation_id")
+            query = body.get("query", "").strip()
+
+            if not esc_id or not query:
+                self._send_json({"error": "escalation_id and query are required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            last_rep = REVIEW_CREW.get_last_report()
+            target_esc = next((e for e in last_rep.escalations if e.id == esc_id), None) if last_rep else None
+            if not target_esc and REVIEW_CREW.memory:
+                target_esc = next((e for e in REVIEW_CREW.memory.escalations.values() if e.id == esc_id), None)
+
+            if not target_esc:
+                self._send_json({"error": f"Escalation {esc_id} not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+
+            fact_result = execute_fact_check(GRAPH, target_esc, query)
+
+            REVIEW_CREW.trace.record_step(
+                cycle=REVIEW_CREW.cycle_count,
+                node="human_gate",
+                action="MONITOR_FACT_CHECK",
+                details={"escalation_id": esc_id, "query": query, "result": fact_result},
+            )
+
+            self._send_json({"status": "completed", "escalation": target_esc.to_dict(), "fact_check": fact_result})
+
+        except Exception as e:
+            logger.exception("Error executing fact check: %s", e)
+            self._send_json({"error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_monitor_comment(self) -> None:
+        """POST /api/monitor/comment — Add doctor comment/suggestion to an escalation."""
+        global REVIEW_CREW
+        if REVIEW_CREW is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json({"error": "Empty body"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            esc_id = body.get("escalation_id")
+            comment_text = body.get("comment", "").strip()
+            author = body.get("author", "Medical Monitor").strip()
+            suggestion = body.get("suggestion", "").strip()
+
+            if not esc_id or not comment_text:
+                self._send_json({"error": "escalation_id and comment are required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            last_rep = REVIEW_CREW.get_last_report()
+            target_esc = next((e for e in last_rep.escalations if e.id == esc_id), None) if last_rep else None
+            if not target_esc and REVIEW_CREW.memory:
+                target_esc = next((e for e in REVIEW_CREW.memory.escalations.values() if e.id == esc_id), None)
+
+            if not target_esc:
+                self._send_json({"error": f"Escalation {esc_id} not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+
+            import datetime
+            c_entry = {
+                "author": author,
+                "comment": comment_text,
+                "suggestion": suggestion,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            }
+            target_esc.monitor_comments.append(c_entry)
+            if suggestion:
+                target_esc.suggested_action = suggestion
+
+            REVIEW_CREW.trace.record_step(
+                cycle=REVIEW_CREW.cycle_count,
+                node="human_gate",
+                action="MONITOR_COMMENT_ADDED",
+                details={"escalation_id": esc_id, "comment": comment_text, "suggestion": suggestion},
+            )
+
+            self._send_json({"status": "updated", "escalation": target_esc.to_dict()})
+
+        except Exception as e:
+            logger.exception("Error adding comment: %s", e)
+            self._send_json({"error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_graph_subject_domain(self, path: str) -> None:
+        """GET /api/graph/subject/{usubjid} or /api/graph/subject/{usubjid}/{domain}"""
+        global GRAPH
+        if GRAPH is None:
+            self._send_json({"error": "Graph not initialized"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        parts = path.strip("/").split("/")
+        if len(parts) < 4:
+            self._send_json({"error": "Invalid path"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        usubjid = unquote(parts[3])
+        domain = unquote(parts[4]).upper() if len(parts) >= 5 else None
+
+        if usubjid not in GRAPH.subjects:
+            self._send_json({"error": f"Subject '{usubjid}' not found"}, status=HTTPStatus.NOT_FOUND)
+            return
+
+        if domain:
+            dom_recs = GRAPH.subject_domain_records.get((usubjid, domain), [])
+            enriched = []
+            for r in dom_recs:
+                seq = r.get("seq", 1)
+                rec_info = dict(r)
+                rec_info["domain"] = domain
+                rec_info["usubjid"] = usubjid
+                rec_info["seq"] = seq
+                rec_info["citation"] = f"RecordRef(domain=\"{domain}\", usubjid=\"{usubjid}\", seq={seq})"
+                enriched.append(rec_info)
+            self._send_json({
+                "usubjid": usubjid,
+                "domain": domain,
+                "count": len(enriched),
+                "records": enriched,
+            })
+        else:
+            p360 = GRAPH.patient360(usubjid)
+            self._send_json({
+                "usubjid": usubjid,
+                "site_id": p360.get("site_id", ""),
+                "arm": p360.get("arm", ""),
+                "demographics": p360.get("demographics", {}),
+                "domains": {d: len(recs) for d, recs in p360.get("records_by_domain", {}).items()},
+                "total_records": len(p360.get("records", [])),
+            })
+
 
 def start_server(host: Optional[str] = None, port: Optional[int] = None, data_dir: Optional[str] = None) -> None:
-    """Initializes StudyGraph, Atlas Engine, and launches the HTTP Server."""
-    global GRAPH, ATLAS_ENGINE, DATA_DIR_PATH, REVIEW_CREW
+    """Initializes StudyGraph, Atlas Engine, ReviewCrew, and AI Conversational Orchestrator."""
+    global GRAPH, ATLAS_ENGINE, DATA_DIR_PATH, REVIEW_CREW, AI_ORCHESTRATOR
 
     # Bind host to 0.0.0.0 for cloud deployment compatibility (e.g. Render)
     target_host = host if host is not None else os.environ.get("HOST", "0.0.0.0")
@@ -631,6 +857,7 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None, data_di
 
     ATLAS_ENGINE = Atlas(GRAPH)
     REVIEW_CREW = ReviewCrew(atlas=ATLAS_ENGINE)
+    AI_ORCHESTRATOR = AtlasConversationalOrchestrator(atlas=ATLAS_ENGINE)
 
     print(f"Graph initialized in {stats['build_time_ms']} ms:")
     print(f"  • Subjects: {stats['subjects']}")

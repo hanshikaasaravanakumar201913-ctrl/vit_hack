@@ -64,6 +64,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const tabViews = document.querySelectorAll(".tab-view");
   const navBrand = document.getElementById("nav-brand");
 
+  // Conversational Assistant State
+  const chatState = {
+    conversationId: null,
+    activeSubject: null,
+  };
+
+  const chatMessagesStream = document.getElementById("chat-messages-stream");
+  const chatContextStrip = document.getElementById("chat-context-strip");
+  const chatActiveSubjectText = document.getElementById("chat-active-subject-text");
+  const chatContextQuickActions = document.getElementById("chat-context-quick-actions");
+  const btnClearChatContext = document.getElementById("btn-clear-chat-context");
+  const btnNewChat = document.getElementById("btn-new-chat");
+
   const queryInput = document.getElementById("query-input");
   const askBtn = document.getElementById("ask-btn");
   const clearBtn = document.getElementById("clear-btn");
@@ -72,6 +85,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const loadingState = document.getElementById("loading-state");
   const resultsArea = document.getElementById("results-area");
   const showcaseGrid = document.getElementById("showcase-chips-grid");
+
 
   // Study Graph Elements
   const graphPatientInput = document.getElementById("graph-patient-input");
@@ -310,6 +324,502 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // =========================================================================
+  // Conversational Clinical Assistant Engine
+  // =========================================================================
+
+  if (btnNewChat) {
+    btnNewChat.addEventListener("click", () => {
+      chatState.conversationId = null;
+      chatState.activeSubject = null;
+      if (chatContextStrip) chatContextStrip.style.display = "none";
+      resetChatStream();
+    });
+  }
+
+  if (btnClearChatContext) {
+    btnClearChatContext.addEventListener("click", () => {
+      chatState.activeSubject = null;
+      if (chatContextStrip) chatContextStrip.style.display = "none";
+    });
+  }
+
+  if (chatContextQuickActions) {
+    chatContextQuickActions.addEventListener("click", (e) => {
+      const btn = e.target.closest(".btn-context-action");
+      if (btn && btn.dataset.action && chatState.activeSubject) {
+        const act = btn.dataset.action;
+        if (act === "liver") {
+          executeChat(`Check liver safety transaminases and potential Hy's law for ${chatState.activeSubject}`);
+        } else if (act === "meds") {
+          executeChat(`Review concomitant medications and prohibited therapies for ${chatState.activeSubject}`);
+        } else if (act === "aes") {
+          executeChat(`What adverse events and hospitalizations were reported for ${chatState.activeSubject}?`);
+        } else if (act === "screening") {
+          executeChat(`What was the baseline screening laboratory profile for ${chatState.activeSubject}?`);
+        }
+      }
+    });
+  }
+
+  function resetChatStream() {
+    if (!chatMessagesStream) return;
+    chatMessagesStream.innerHTML = `
+      <div class="chat-message assistant-message welcome-message">
+        <div class="msg-avatar">ATLAS</div>
+        <div class="msg-body">
+          <div class="msg-author-row">
+            <span class="msg-author-name">ATLAS Clinical Assistant</span>
+            <span class="msg-time">Grounded in STUDY-042 Graph</span>
+          </div>
+          <div class="msg-content">
+            <p>Welcome to <strong>ATLAS</strong>, your AI conversational clinical study intelligence assistant.</p>
+            <p>I perform natural-language clinical investigations across STUDY-042 by directly querying the knowledge graph, calculating biochemical thresholds, and applying governing protocol rules. Every fact is traceable to verified CDISC SDTM records.</p>
+          </div>
+          <div class="suggested-pills-wrap">
+            <div class="suggested-lead">Suggested inquiries:</div>
+            <div class="suggested-pills" id="showcase-chips-grid">
+              <button class="suggested-pill" type="button" data-query="Tell me about subject 042-S07-001.">Tell me about subject 042-S07-001</button>
+              <button class="suggested-pill" type="button" data-query="Which subjects meet potential Hy's law criteria?">Which subjects meet Hy's law criteria?</button>
+              <button class="suggested-pill" type="button" data-query="Which subjects at site S09 received a wrong dose?">Which subjects at site S09 received a wrong dose?</button>
+              <button class="suggested-pill" type="button" data-query="Which subjects took prohibited concomitant medications?">Which subjects took prohibited medications?</button>
+              <button class="suggested-pill" type="button" data-query="How many subjects at site S11 discontinued due to an adverse event?">How many subjects at S11 discontinued due to an AE?</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    bindShowcasePills();
+  }
+
+  function bindShowcasePills() {
+    const pills = document.querySelectorAll("#chat-messages-stream .suggested-pill");
+    pills.forEach((p) => {
+      p.addEventListener("click", () => {
+        const q = p.dataset.query || p.textContent.trim();
+        executeChat(q);
+      });
+    });
+  }
+  bindShowcasePills();
+
+  function formatMarkdown(text) {
+    if (!text) return "";
+    let safe = escapeHtml(text);
+
+    // Code blocks
+    safe = safe.replace(/```([\s\S]*?)```/g, (match, p1) => {
+      return `<pre><code>${p1.trim()}</code></pre>`;
+    });
+
+    // Inline code
+    safe = safe.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+    // Bold & italic
+    safe = safe.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    safe = safe.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+
+    // Process lines for lists, callouts, and paragraphs
+    const lines = safe.split("\n");
+    let inUl = false;
+    let inOl = false;
+    const output = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) {
+        if (inUl) { output.push("</ul>"); inUl = false; }
+        if (inOl) { output.push("</ol>"); inOl = false; }
+        continue;
+      }
+
+      // Unordered list
+      const ulMatch = line.match(/^[-*•]\s+(.*)$/);
+      if (ulMatch) {
+        if (inOl) { output.push("</ol>"); inOl = false; }
+        if (!inUl) { output.push("<ul>"); inUl = true; }
+        output.push(`<li>${ulMatch[1]}</li>`);
+        continue;
+      }
+
+      // Ordered list
+      const olMatch = line.match(/^(\d+)\.\s+(.*)$/);
+      if (olMatch) {
+        if (inUl) { output.push("</ul>"); inUl = false; }
+        if (!inOl) { output.push("<ol>"); inOl = true; }
+        output.push(`<li>${olMatch[2]}</li>`);
+        continue;
+      }
+
+      if (inUl) { output.push("</ul>"); inUl = false; }
+      if (inOl) { output.push("</ol>"); inOl = false; }
+
+      // Callout box
+      if (line.startsWith("&gt;")) {
+        const textContent = line.replace(/^&gt;\s*/, "");
+        let calloutClass = "clinical-finding-callout";
+        if (textContent.includes("CRITICAL") || textContent.includes("ELEVATED") || textContent.includes("Hy&#39;s Law") || textContent.includes("HYS")) {
+          calloutClass += " callout-critical";
+        } else if (textContent.includes("WARNING") || textContent.includes("DISCREPANCY") || textContent.includes("DEVIATION")) {
+          calloutClass += " callout-warning";
+        }
+        output.push(`<div class="${calloutClass}">${textContent}</div>`);
+        continue;
+      }
+
+      // Headings
+      if (line.startsWith("### ")) {
+        output.push(`<h4 style="margin: 12px 0 6px; font-weight: 700; color: var(--text-main); font-size: 0.95rem;">${line.substring(4)}</h4>`);
+        continue;
+      }
+      if (line.startsWith("## ")) {
+        output.push(`<h3 style="margin: 14px 0 8px; font-weight: 700; color: var(--text-main); font-size: 1.05rem;">${line.substring(3)}</h3>`);
+        continue;
+      }
+
+      output.push(`<p>${line}</p>`);
+    }
+
+    if (inUl) output.push("</ul>");
+    if (inOl) output.push("</ol>");
+
+    return output.join("");
+  }
+
+  function showCdiscRecordModal(record) {
+    let backdrop = document.getElementById("cdisc-modal-backdrop");
+    if (!backdrop) {
+      backdrop = document.createElement("div");
+      backdrop.id = "cdisc-modal-backdrop";
+      backdrop.className = "cdisc-record-modal-backdrop";
+      document.body.appendChild(backdrop);
+    }
+
+    const rows = Object.entries(record)
+      .filter(([k]) => !k.startsWith("_") && k !== "raw")
+      .map(([k, v]) => `
+        <tr>
+          <th>${escapeHtml(k)}</th>
+          <td>${escapeHtml(String(v ?? ""))}</td>
+        </tr>
+      `)
+      .join("");
+
+    const dom = record.DOMAIN || record.domain || "RECORD";
+    const seq = record.SEQ || record.seq || record.LBSEQ || record.AESEQ || record.EXSEQ || record.CMSEQ || "1";
+    const subj = record.USUBJID || record.usubjid || (graphState.patient && graphState.patient.usubjid) || "042";
+    const testName = record.LBTEST || record.LBTESTCD || record.AETERM || record.EXTRT || record.CMTRT || record.VSTEST || dom;
+
+    backdrop.innerHTML = `
+      <div class="cdisc-record-modal-panel">
+        <div class="cdisc-modal-header">
+          <div class="cdisc-modal-title">CDISC SDTM Record: ${escapeHtml(dom)} • Seq ${escapeHtml(String(seq))} (${escapeHtml(subj)})</div>
+          <button class="cdisc-modal-close" id="btn-close-cdisc-modal">&times;</button>
+        </div>
+        <div class="cdisc-modal-body">
+          <table class="cdisc-modal-table">
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+        </div>
+        <div class="cdisc-modal-footer">
+          <button class="btn-primary btn-sm" id="btn-modal-ask-atlas">Ask ATLAS about this record</button>
+          <button class="btn-secondary btn-sm" id="btn-modal-close-footer">Close</button>
+        </div>
+      </div>
+    `;
+
+    backdrop.style.display = "flex";
+
+    const closeFn = () => { backdrop.style.display = "none"; };
+    backdrop.querySelector("#btn-close-cdisc-modal").addEventListener("click", closeFn);
+    backdrop.querySelector("#btn-modal-close-footer").addEventListener("click", closeFn);
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) closeFn();
+    });
+
+    backdrop.querySelector("#btn-modal-ask-atlas").addEventListener("click", () => {
+      closeFn();
+      switchTab("ask");
+      const q = `Explain the clinical significance of ${dom} record seq ${seq} (${testName}) for subject ${subj}`;
+      executeChat(q);
+    });
+  }
+
+  function appendUserMessage(text) {
+    if (!chatMessagesStream) return;
+    const msgDiv = document.createElement("div");
+    msgDiv.className = "chat-message user-message";
+    msgDiv.innerHTML = `
+      <div class="msg-avatar">YOU</div>
+      <div class="msg-body">
+        <div class="msg-author-row">
+          <span class="msg-author-name">Clinical Investigator</span>
+          <span class="msg-time">${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        </div>
+        <div class="msg-content">
+          ${escapeHtml(text)}
+        </div>
+      </div>
+    `;
+    chatMessagesStream.appendChild(msgDiv);
+    chatMessagesStream.scrollTop = chatMessagesStream.scrollHeight;
+  }
+
+  function appendTypingIndicator(typingId) {
+    if (!chatMessagesStream) return;
+    const typingDiv = document.createElement("div");
+    typingDiv.id = typingId;
+    typingDiv.className = "chat-message assistant-message";
+    typingDiv.innerHTML = `
+      <div class="msg-avatar">ATLAS</div>
+      <div class="msg-body">
+        <div class="msg-author-row">
+          <span class="msg-author-name">ATLAS Clinical Assistant</span>
+          <span class="msg-time">Reasoning across StudyGraph...</span>
+        </div>
+        <div class="chat-typing-indicator">
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span class="typing-dot"></span>
+          <span style="margin-left: 6px; font-size: 0.76rem;">Evaluating protocol rules and CDISC records</span>
+        </div>
+      </div>
+    `;
+    chatMessagesStream.appendChild(typingDiv);
+    chatMessagesStream.scrollTop = chatMessagesStream.scrollHeight;
+  }
+
+  function removeTypingIndicator(typingId) {
+    const el = document.getElementById(typingId);
+    if (el) el.remove();
+  }
+
+  function appendErrorMessage(errorText) {
+    if (!chatMessagesStream) return;
+    const msgDiv = document.createElement("div");
+    msgDiv.className = "chat-message assistant-message";
+    msgDiv.innerHTML = `
+      <div class="msg-avatar" style="background: #EF4444;">!</div>
+      <div class="msg-body">
+        <div class="msg-author-row">
+          <span class="msg-author-name" style="color: #DC2626;">System Notice</span>
+          <span class="msg-time">${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+        </div>
+        <div class="msg-content" style="border-left: 3px solid #DC2626;">
+          <p style="color: #DC2626; font-weight: 600;">${escapeHtml(errorText)}</p>
+          <p style="font-size: 0.8rem; color: var(--text-secondary);">Please verify backend connectivity or try rephrasing your inquiry.</p>
+        </div>
+      </div>
+    `;
+    chatMessagesStream.appendChild(msgDiv);
+    chatMessagesStream.scrollTop = chatMessagesStream.scrollHeight;
+  }
+
+  function appendAssistantMessage(data) {
+    if (!chatMessagesStream) return;
+    const {
+      message = "",
+      evidence = [],
+      followup_suggestions = [],
+      active_subject,
+      latency_ms = 15.0,
+    } = data;
+
+    const formattedContent = formatMarkdown(message);
+
+    // Build evidence cards if provided
+    let evidenceHtml = "";
+    if (evidence && evidence.length > 0) {
+      const cardsHtml = evidence.map((ev) => {
+        const dom = ev.domain || "CDISC";
+        const subj = ev.usubjid || active_subject || "042";
+        const seq = ev.seq || "1";
+        const test = ev.test || ev.term || ev.treatment || dom;
+        const res = ev.result != null ? ev.result : "";
+        const units = ev.units || "";
+        const visit = ev.visit || "";
+        const evJson = escapeHtml(JSON.stringify(ev));
+
+        return `
+          <div class="chat-evidence-card">
+            <div class="evidence-card-top">
+              <span class="evidence-domain-tag evidence-domain-${escapeHtml(dom)}">${escapeHtml(dom)}</span>
+              <span class="evidence-seq-tag">Seq ${escapeHtml(String(seq))}</span>
+            </div>
+            <div class="evidence-card-title">${escapeHtml(test)} ${res ? `= ${escapeHtml(String(res))} ${escapeHtml(units)}` : ""}</div>
+            <div class="evidence-card-summary">Subject: <strong>${escapeHtml(subj)}</strong> ${visit ? `• Visit: ${escapeHtml(visit)}` : ""}</div>
+            <div class="evidence-card-actions">
+              <button type="button" class="btn-card-action btn-view-ev-modal" data-ev='${evJson}'>[View record]</button>
+              <button type="button" class="btn-card-action btn-ask-ev-action" data-subj="${escapeHtml(subj)}" data-dom="${escapeHtml(dom)}" data-seq="${escapeHtml(String(seq))}" data-test="${escapeHtml(test)}">[Ask ATLAS about this]</button>
+            </div>
+          </div>
+        `;
+      }).join("");
+
+      evidenceHtml = `
+        <div class="chat-evidence-section">
+          <div class="chat-evidence-header">
+            <span class="chat-evidence-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+              <span>CDISC SDTM Ground-Truth Evidence (${evidence.length} Records)</span>
+            </span>
+          </div>
+          <div class="chat-evidence-grid">
+            ${cardsHtml}
+          </div>
+        </div>
+      `;
+    }
+
+    // Build follow-up suggestions if provided
+    let followupHtml = "";
+    if (followup_suggestions && followup_suggestions.length > 0) {
+      const chipsHtml = followup_suggestions.map((s) => `
+        <button type="button" class="followup-chip" data-query="${escapeHtml(s)}">${escapeHtml(s)}</button>
+      `).join("");
+
+      followupHtml = `
+        <div class="followup-chips-wrap">
+          <div class="followup-lead">Recommended Next Inquiries:</div>
+          <div class="followup-chips-row">
+            ${chipsHtml}
+          </div>
+        </div>
+      `;
+    }
+
+    const msgDiv = document.createElement("div");
+    msgDiv.className = "chat-message assistant-message";
+    msgDiv.innerHTML = `
+      <div class="msg-avatar">ATLAS</div>
+      <div class="msg-body">
+        <div class="msg-author-row">
+          <span class="msg-author-name">ATLAS Clinical Assistant</span>
+          <span class="msg-time">Grounded in STUDY-042 Graph • ${Math.round(latency_ms)}ms</span>
+        </div>
+        <div class="msg-content">
+          ${formattedContent}
+          ${evidenceHtml}
+          ${followupHtml}
+        </div>
+      </div>
+    `;
+
+    // Bind evidence actions
+    msgDiv.querySelectorAll(".btn-view-ev-modal").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        try {
+          const rec = JSON.parse(btn.dataset.ev);
+          showCdiscRecordModal(rec);
+        } catch (e) {
+          console.error("Parse ev modal err:", e);
+        }
+      });
+    });
+
+    msgDiv.querySelectorAll(".btn-ask-ev-action").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const { subj, dom, seq, test } = btn.dataset;
+        executeChat(`Explain the clinical significance of ${dom} record seq ${seq} (${test}) for subject ${subj}`);
+      });
+    });
+
+    // Bind follow-up chips
+    msgDiv.querySelectorAll(".followup-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const q = chip.dataset.query;
+        executeChat(q);
+      });
+    });
+
+    chatMessagesStream.appendChild(msgDiv);
+    chatMessagesStream.scrollTop = chatMessagesStream.scrollHeight;
+  }
+
+  async function executeChat(questionText, options = {}) {
+    if (!questionText || state.isQueryRunning) return;
+    const cleanQuery = questionText.trim();
+    if (!cleanQuery) return;
+
+    state.isQueryRunning = true;
+    addSessionQueryHistory(cleanQuery);
+
+    if (queryInput) {
+      queryInput.value = "";
+      if (clearBtn) clearBtn.style.display = "none";
+    }
+
+    if (askBtn) {
+      askBtn.disabled = true;
+      const textSpan = askBtn.querySelector(".btn-text");
+      if (textSpan) textSpan.textContent = "Reasoning...";
+      const spinner = askBtn.querySelector(".btn-spinner");
+      if (spinner) spinner.style.display = "inline-block";
+    }
+
+    // 1. Append User Message Bubble
+    appendUserMessage(cleanQuery);
+
+    // 2. Append Typing Indicator
+    const typingId = "typing-" + Date.now();
+    appendTypingIndicator(typingId);
+
+    try {
+      const payload = {
+        message: cleanQuery,
+        conversation_id: chatState.conversationId,
+        active_subject: options.activeSubject || chatState.activeSubject,
+      };
+
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      removeTypingIndicator(typingId);
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `HTTP ${res.status}: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+
+      // Update conversational state
+      chatState.conversationId = data.conversation_id || chatState.conversationId;
+      if (data.active_subject) {
+        chatState.activeSubject = data.active_subject;
+        if (chatContextStrip && chatActiveSubjectText) {
+          chatActiveSubjectText.textContent = `Focus: ${data.active_subject}`;
+          chatContextStrip.style.display = "flex";
+        }
+      }
+
+      // 3. Append Assistant Message Bubble
+      appendAssistantMessage(data);
+
+    } catch (err) {
+      console.error("Chat execution error:", err);
+      removeTypingIndicator(typingId);
+      appendErrorMessage(err.message);
+    } finally {
+      state.isQueryRunning = false;
+      if (askBtn) {
+        askBtn.disabled = false;
+        const textSpan = askBtn.querySelector(".btn-text");
+        if (textSpan) textSpan.textContent = "Send";
+        const spinner = askBtn.querySelector(".btn-spinner");
+        if (spinner) spinner.style.display = "none";
+      }
+      if (chatMessagesStream) {
+        chatMessagesStream.scrollTop = chatMessagesStream.scrollHeight;
+      }
+    }
+  }
+
   if (askBtn) {
     askBtn.addEventListener("click", () => handleQuerySubmit());
   }
@@ -317,12 +827,7 @@ document.addEventListener("DOMContentLoaded", () => {
   function handleQuerySubmit() {
     const text = queryInput.value.trim();
     if (!text || state.isQueryRunning) return;
-
-    const matched = state.demoQuestions.find((q) => q.text.toLowerCase() === text.toLowerCase());
-    const qid = matched ? matched.question_id : "Q_USER";
-    const kind = matched ? matched.kind : null;
-
-    executeAsk(text, qid, kind);
+    executeChat(text);
   }
 
   function addSessionQueryHistory(queryText) {
@@ -341,7 +846,7 @@ document.addEventListener("DOMContentLoaded", () => {
         pill.addEventListener("click", () => {
           queryInput.value = item;
           clearBtn.style.display = "block";
-          executeAsk(item);
+          executeChat(item);
         });
         historyChips.appendChild(pill);
       });
@@ -350,81 +855,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function executeAsk(questionText, questionId, questionKind) {
-    if (state.isQueryRunning) return;
-    state.isQueryRunning = true;
-
-    addSessionQueryHistory(questionText);
-
-    if (loadingState) loadingState.style.display = "block";
-    if (resultsArea) resultsArea.style.display = "none";
-    if (askBtn) {
-      askBtn.disabled = true;
-      const textSpan = askBtn.querySelector(".btn-text");
-      if (textSpan) textSpan.textContent = "Investigating...";
-      const spinner = askBtn.querySelector(".btn-spinner");
-      if (spinner) spinner.style.display = "inline-block";
-    }
-
-    try {
-      const payload = {
-        question: questionText,
-        question_id: questionId || "Q_USER",
-        kind: questionKind || null,
-      };
-
-      const res = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.error || `Server responded with HTTP ${res.status}`);
-      }
-
-      const data = await res.json();
-      renderInvestigationResult(data);
-
-      if (resultsArea) {
-        resultsArea.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-    } catch (err) {
-      console.error("Ask query execution error:", err);
-      if (resultsArea) {
-        resultsArea.innerHTML = `
-          <div class="result-card-container" style="border-left: 4px solid var(--critical-border);">
-            <div class="result-meta-header">
-              <div>
-                <h3 class="result-query-title" style="color: var(--critical-text);">Investigation Query Encountered an Error</h3>
-                <div class="result-tags-row">
-                  <span class="badge-kind" style="background: var(--critical-bg); color: var(--critical-text); border: 1px solid var(--critical-border);">EXECUTION ERROR</span>
-                </div>
-              </div>
-            </div>
-            <div class="answer-box">
-              <div class="answer-lead-label">Diagnostic Failure Message</div>
-              <p style="color: var(--critical-text); font-size: 0.95rem;">${escapeHtml(err.message)}</p>
-              <div class="rationale-block">
-                Please verify that the backend server is online at <code>http://127.0.0.1:8080</code> and that study files are accessible.
-              </div>
-            </div>
-          </div>
-        `;
-        resultsArea.style.display = "block";
-      }
-    } finally {
-      state.isQueryRunning = false;
-      if (loadingState) loadingState.style.display = "none";
-      if (askBtn) {
-        askBtn.disabled = false;
-        const textSpan = askBtn.querySelector(".btn-text");
-        if (textSpan) textSpan.textContent = "Ask ATLAS";
-        const spinner = askBtn.querySelector(".btn-spinner");
-        if (spinner) spinner.style.display = "none";
-      }
-    }
+    return executeChat(questionText);
   }
+
 
   function renderInvestigationResult(data) {
     if (!resultsArea) return;
@@ -844,6 +1277,48 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function renderDomainRecordsInspector(usubjid, domain, records = []) {
+    if (!records || records.length === 0) {
+      return `<div style="padding: 10px 0; color: var(--text-muted); font-size: 0.78rem;">No records indexed for domain ${domain}.</div>`;
+    }
+
+    const recordsSlice = records.slice(0, 20); // Render up to 20 key records for responsiveness
+    const cardsHtml = recordsSlice.map((rec) => {
+      const seq = rec.seq || rec.LBSEQ || rec.AESEQ || rec.EXSEQ || rec.CMSEQ || rec.VSSEQ || "1";
+      const test = rec.LBTESTCD || rec.AETERM || rec.EXTRT || rec.CMTRT || rec.VSTESTCD || domain;
+      const res = rec.LBORRES != null ? rec.LBORRES : (rec.EXDOSE != null ? rec.EXDOSE : (rec.CMDOSE != null ? rec.CMDOSE : (rec.VSORRES != null ? rec.VSORRES : (rec.AESEV || ""))));
+      const unit = rec.LBORRESU || rec.EXDOSU || rec.CMDOSU || rec.VSORRESU || "";
+      const visit = rec.VISIT || "";
+      const recJson = escapeHtml(JSON.stringify(rec));
+
+      return `
+        <div class="insp-record-card">
+          <div class="insp-record-header">
+            <span class="insp-record-test">${escapeHtml(test)}</span>
+            <span class="insp-record-val">${escapeHtml(String(res))} ${escapeHtml(unit)}</span>
+          </div>
+          <div class="insp-record-row">
+            <span>Visit: ${escapeHtml(visit || "N/A")}</span>
+            <span style="font-family: var(--font-mono); font-size: 0.72rem;">Seq ${escapeHtml(String(seq))}</span>
+          </div>
+          <div class="insp-record-actions">
+            <button type="button" class="btn-card-action btn-insp-view-rec" data-rec='${recJson}'>[View record]</button>
+            <button type="button" class="btn-ask-atlas-rec btn-insp-ask-rec" data-dom="${escapeHtml(domain)}" data-seq="${escapeHtml(String(seq))}" data-subj="${escapeHtml(usubjid)}" data-test="${escapeHtml(test)}">[Ask ATLAS about this]</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    return `
+      <div style="margin-top: 14px; font-size: 0.74rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase;">
+        Connected ${domain} Records (${records.length} total):
+      </div>
+      <div class="insp-records-container">
+        ${cardsHtml}
+      </div>
+    `;
+  }
+
   if (inspBody) {
     inspBody.addEventListener("click", (e) => {
       const focusBtn = e.target.closest(".insp-focus-subj-btn");
@@ -854,8 +1329,24 @@ document.addEventListener("DOMContentLoaded", () => {
       if (openBtn && openBtn.dataset.subj) {
         openPatient360(openBtn.dataset.subj);
       }
+      const viewRecBtn = e.target.closest(".btn-insp-view-rec");
+      if (viewRecBtn && viewRecBtn.dataset.rec) {
+        try {
+          const rec = JSON.parse(viewRecBtn.dataset.rec);
+          showCdiscRecordModal(rec);
+        } catch (err) {
+          console.error("View rec modal err:", err);
+        }
+      }
+      const askRecBtn = e.target.closest(".btn-insp-ask-rec");
+      if (askRecBtn && askRecBtn.dataset.subj) {
+        const { subj, dom, seq, test } = askRecBtn.dataset;
+        switchTab("ask");
+        executeChat(`Explain the clinical significance of ${dom} record seq ${seq} (${test}) for subject ${subj}`);
+      }
     });
   }
+
 
   // SVG Helper Methods
   function createSvgEl(tag, attrs = {}) {
@@ -1615,6 +2106,7 @@ document.addEventListener("DOMContentLoaded", () => {
             { k: "Key Analytes:", v: "ALT, AST, BILI, HBA1C, GLUC" },
             { k: "Reference Range:", v: site_id === "S07" ? "Site S07 Manual (μkat/L)" : "Central Lab Manual (U/L)" },
           ],
+          customHtml: renderDomainRecordsInspector(usubjid, "LB", lbRecords),
           actionText: "Evaluate Potential Hy's Law in Cohort",
           actionQuery: "Which subjects meet potential Hy's law criteria?",
         },
@@ -1813,6 +2305,7 @@ document.addEventListener("DOMContentLoaded", () => {
             { k: "Total Vital Signs:", v: String(vsRecords.length) },
             { k: "Recorded Parameters:", v: "SYSBP, DIABP, PULSE, TEMP, WEIGHT" },
           ],
+          customHtml: renderDomainRecordsInspector(usubjid, "VS", vsRecords),
           actionText: `List Vitals & Labs for ${usubjid} at Week 8`,
           actionQuery: `List the vital signs and laboratory records for 042-S05-003 around Week 8`,
         },
@@ -1858,6 +2351,7 @@ document.addEventListener("DOMContentLoaded", () => {
               v: hasDoseDeviation ? "PROTOCOL DEVIATION (Wrong Dose Administered)" : "100% Accordant",
             },
           ],
+          customHtml: renderDomainRecordsInspector(usubjid, "EX", exRecords),
           actionText: `Audit Site ${site_id} Dosing Compliance`,
           actionQuery: `Which subjects at site ${site_id} received a wrong dose?`,
         },
@@ -1962,6 +2456,7 @@ document.addEventListener("DOMContentLoaded", () => {
             { k: "Effective Date:", v: dsRecords[0]?.DSSTDTC || "Study End" },
             { k: "Discontinuation AE:", v: isDisc ? "YES (Adverse Event Discontinuation)" : "None" },
           ],
+          customHtml: renderDomainRecordsInspector(usubjid, "DS", dsRecords),
           actionText: `Audit Discontinuations at Site ${site_id}`,
           actionQuery: `How many subjects at site ${site_id} discontinued due to an adverse event?`,
         },
@@ -2032,6 +2527,7 @@ document.addEventListener("DOMContentLoaded", () => {
               { k: "Cohort Profile:", v: "Clean / Well-Tolerated" },
               { k: "SAEs / Hospitalization:", v: "None" },
             ],
+            customHtml: renderDomainRecordsInspector(usubjid, "AE", []),
             actionText: `Audit SAEs at Site ${site_id}`,
             actionQuery: `Which subjects at site ${site_id} have serious adverse events?`,
           },
@@ -2091,6 +2587,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 v: aeRecords.some((r) => (r.AESHOSP || "").toUpperCase() === "Y") ? "YES (Hospitalized)" : "NO",
               },
             ],
+            customHtml: renderDomainRecordsInspector(usubjid, "AE", aeRecords),
             actionText: `Audit SAEs at Site ${site_id}`,
             actionQuery: `Which subjects at site ${site_id} have serious adverse events?`,
           },
@@ -2115,26 +2612,27 @@ document.addEventListener("DOMContentLoaded", () => {
           stroke: isSae ? "#DC2626" : "#D97706",
           strokeWidth: isSae ? 2.5 : 1.6,
           label: (ae.AETERM || "AE").slice(0, 10),
-          sublabel: `${ae.AESEV} • ${ae.AESTDTC || "D?"}`,
-          badge: isHosp ? "HOSPITALIZED" : isSae ? "SAE" : "MILD",
+          sublabel: ae.AESEV || "MILD",
+          badge: isSae ? "SAE" : "AE",
           badgeColor: isSae ? "#DC2626" : "#D97706",
           badgeBg: isSae ? "#FEF2F2" : "#FFFBEB",
           data: {
             inspector: {
-              type: `ADVERSE EVENT RECORD [AE] ${isSae ? "(SAE)" : ""}`,
-              title: `${ae.AETERM || "Adverse Event"} (${ae.AESEV || "Reported"})`,
-              desc: ae.AENARR || `Investigator reported ${ae.AETERM} with onset on ${ae.AESTDTC || "nominal visit"}.`,
+              type: `ADVERSE EVENT RECORD ${isSae ? "(SERIOUS / HOSPITALIZED)" : ""}`,
+              title: `${ae.AETERM || "Adverse Event"} (${ae.AESEV || "Grade 1"})`,
+              desc: isHosp
+                ? `HOSPITALIZATION REQUIRED. Severe adverse event meeting regulatory serious criteria.`
+                : `Reported adverse event with onset date ${ae.AESTDTC || "N/A"}.`,
               stats: [
-                { k: "Reported Event:", v: ae.AETERM || "N/A" },
+                { k: "Reported Term:", v: ae.AETERM || "N/A" },
+                { k: "Severity:", v: ae.AESEV || "N/A" },
+                { k: "Serious Criteria:", v: isSae ? "YES (SAE)" : "NO" },
+                { k: "Hospitalization:", v: isHosp ? "YES" : "NO" },
                 { k: "Onset Date:", v: ae.AESTDTC || "N/A" },
-                { k: "Severity Rating:", v: ae.AESEV || "N/A" },
-                { k: "Serious (SAE):", v: isSae ? "YES (SAE)" : "NO" },
-                { k: "Hospitalization (AESHOSP):", v: isHosp ? "YES (Required Inpatient Stay)" : "NO" },
-                { k: "Outcome:", v: ae.AEOUT || "RECOVERED" },
-                { k: "Sequence #:", v: String(ae.seq || ae.AESEQ || "1") },
+                { k: "Sequence #:", v: String(ae.seq || "1") },
               ],
-              actionText: `Audit SAEs at Site ${site_id}`,
-              actionQuery: `Which subjects at site ${site_id} have serious adverse events?`,
+              actionText: "Evaluate Hy's Law Association",
+              actionQuery: "Which subjects meet potential Hy's law criteria?",
             },
           },
         });
@@ -2144,18 +2642,12 @@ document.addEventListener("DOMContentLoaded", () => {
     // 9. Hub: CM Hub (Concomitant Medications) (Top Left: 305, 180)
     const cmHubId = "hub-cm";
     const hasProhibited = cmRecords.some((r) => {
-      const trt = (r.CMTRT || "").toUpperCase();
-      const cls = (r.CMCLAS || "").toUpperCase();
-      return (
-        trt.includes("PREDNISOLONE") ||
-        trt.includes("GLIBENCLAMIDE") ||
-        cls.includes("GLUCOCORTICOID") ||
-        cls.includes("SULFONYLUREA")
-      );
+      const t = (r.CMTRT || "").toUpperCase();
+      return t.includes("PREDNISOLONE") || t.includes("GLIBENCLAMIDE") || t.includes("SULFONYLUREA");
     });
 
     drawEdge(patientNodeId, cmHubId, cx, cy, 305, 180, hasProhibited ? "#DC2626" : "#94A3B8", {
-      width: 1.8,
+      width: 2,
       isCurved: true,
     });
     drawNode({
@@ -2184,6 +2676,7 @@ document.addEventListener("DOMContentLoaded", () => {
             },
             { k: "Governing Cut:", v: "Cut 12 (v3.0)" },
           ],
+          customHtml: renderDomainRecordsInspector(usubjid, "CM", cmRecords),
           actionText: "Audit Prohibited Concomitant Meds in Cohort",
           actionQuery: "Which subjects took prohibited concomitant medications?",
         },
@@ -2606,13 +3099,14 @@ document.addEventListener("DOMContentLoaded", () => {
     const askAboutSubjBtn = document.getElementById("btn-ask-about-subj");
     if (askAboutSubjBtn) {
       askAboutSubjBtn.addEventListener("click", () => {
-        const query = `List the laboratory and adverse-event records for ${usubjid} within 7 days of the WEEK8 visit`;
+        const query = `Tell me about subject ${usubjid}.`;
         switchTab("ask");
-        if (queryInput) {
-          queryInput.value = query;
-          clearBtn.style.display = "block";
+        chatState.activeSubject = usubjid;
+        if (chatContextStrip && chatActiveSubjectText) {
+          chatActiveSubjectText.textContent = `Focus: ${usubjid}`;
+          chatContextStrip.style.display = "flex";
         }
-        executeAsk(query);
+        executeChat(query, { activeSubject: usubjid });
       });
     }
 
@@ -2871,10 +3365,61 @@ document.addEventListener("DOMContentLoaded", () => {
       if (esc.status === "APPROVED") {
         gateStatusPill = `<span class="gate-status-pill gate-pill-approved">✓ APPROVED</span>`;
       } else if (esc.status === "REJECTED") {
-        gateStatusPill = `<span class="gate-status-pill gate-pill-rejected">✕ REJECTED (MONITORING-ONLY)</span>`;
-      } else if (esc.status === "CLARIFIED") {
-        gateStatusPill = `<span class="gate-status-pill gate-pill-clarified">ℹ CLARIFIED</span>`;
+        gateStatusPill = `<span class="gate-status-pill gate-pill-rejected">✕ REJECTED</span>`;
+      } else if (esc.status === "MONITORING") {
+        gateStatusPill = `<span class="gate-status-pill" style="background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A;">👁 MONITORING ONLY</span>`;
+      } else if (esc.status === "CLARIFIED" || esc.status === "FACT_CHECK_COMPLETE") {
+        gateStatusPill = `<span class="gate-status-pill gate-pill-clarified">ℹ FACT-CHECKED</span>`;
       }
+
+      let aiReviewHtml = "";
+      if (esc.medical_review_details) {
+        const m = esc.medical_review_details;
+        aiReviewHtml = `
+          <div class="ai-medical-review-card">
+            <div class="ai-review-title">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+              <span>AI Medical Review & Safety Assessment</span>
+            </div>
+            <div class="ai-review-body">
+              <div class="ai-review-meta-item"><strong>Why Detected:</strong> ${escapeHtml(m.why_detected || esc.summary || "")}</div>
+              <div class="ai-review-meta-item"><strong>Protocol Basis:</strong> ${escapeHtml(m.protocol_basis || esc.finding_code || "")}</div>
+              <div class="ai-review-meta-item"><strong>Medical Assessment:</strong> ${escapeHtml(m.medical_review || esc.rationale || "")}</div>
+              ${m.alternative_explanations ? `<div class="ai-review-meta-item"><strong>Alternative Explanations:</strong> ${escapeHtml(m.alternative_explanations)}</div>` : ""}
+              ${m.recommended_investigation ? `<div class="ai-review-meta-item"><strong>Recommended Next Investigation:</strong> ${escapeHtml(m.recommended_investigation)}</div>` : ""}
+            </div>
+          </div>
+        `;
+      }
+
+      let factCheckHtml = `
+        <div class="fact-check-container" id="fc-container-${esc.id}">
+          <div class="fact-check-top">
+            <span class="fact-check-label">StudyGraph Fact Check</span>
+            <span style="font-size: 0.7rem; color: #1E40AF;">Grounded Evidence Verification</span>
+          </div>
+          <div class="fact-check-input-row">
+            <input type="text" class="fact-check-input" id="fc-input-${esc.id}" placeholder="Ask fact check question (e.g. Check screening baseline ALT for this subject)..." />
+            <button type="button" class="fact-check-btn" data-id="${esc.id}">Fact Check</button>
+          </div>
+          <div id="fc-result-wrap-${esc.id}">
+            ${esc.fact_check_result ? `<div class="fact-check-result-card"><strong>Fact Check Result:</strong> ${escapeHtml(esc.fact_check_result)}</div>` : ""}
+          </div>
+        </div>
+      `;
+
+      const comments = esc.monitor_comments || [];
+      let commentsHtml = `
+        <div class="doctor-comment-container">
+          <div class="doctor-comment-input-row">
+            <input type="text" class="doctor-comment-input" id="doc-comment-input-${esc.id}" placeholder="Add doctor review note or clinical suggestion..." />
+            <button type="button" class="doctor-comment-btn" data-id="${esc.id}">Save Note</button>
+          </div>
+          <div class="monitor-comments-trail" id="doc-comments-trail-${esc.id}">
+            ${comments.map((c) => `<div class="comment-bubble"><strong>${escapeHtml(c.author || "Reviewer")}:</strong> ${escapeHtml(c.comment || "")} <span style="font-size: 0.68rem; color: var(--text-muted); float: right;">${escapeHtml(c.timestamp ? c.timestamp.split("T")[1]?.slice(0, 8) || "" : "")}</span></div>`).join("")}
+          </div>
+        </div>
+      `;
 
       let clarificationCard = "";
       const savedClarify = monitorState.clarifications[esc.id] || esc.clarification_response;
@@ -2906,6 +3451,9 @@ document.addEventListener("DOMContentLoaded", () => {
           <strong>Reviewer Rationale:</strong> ${escapeHtml(esc.rationale || "Protocol safety review requirement.")}
         </div>
         ${citationsHtml ? `<div class="escalation-citations-row"><span style="font-size: 0.74rem; font-weight: 600; color: var(--text-secondary);">Evidence Citations:</span> ${citationsHtml}</div>` : ""}
+        ${aiReviewHtml}
+        ${factCheckHtml}
+        ${commentsHtml}
         <div id="clarify-box-wrap-${esc.id}">
           ${clarificationCard}
         </div>
@@ -2915,7 +3463,8 @@ document.addEventListener("DOMContentLoaded", () => {
           </div>
           <div class="gate-buttons-group">
             <button type="button" class="btn-gate-approve" data-id="${escapeHtml(esc.id)}">Approve</button>
-            <button type="button" class="btn-gate-reject" data-id="${escapeHtml(esc.id)}">Reject (Monitoring-Only)</button>
+            <button type="button" class="btn-gate-reject" data-id="${escapeHtml(esc.id)}">Reject</button>
+            <button type="button" class="btn-gate-monitor" data-id="${escapeHtml(esc.id)}" style="background: #FFFBEB; border: 1px solid #FDE68A; color: #92400E; font-size: 0.74rem; padding: 4px 8px; border-radius: 4px; cursor: pointer;">Monitoring Only</button>
             <button type="button" class="btn-gate-clarify" data-id="${escapeHtml(esc.id)}">Clarify Fact</button>
           </div>
         </div>
@@ -2925,11 +3474,74 @@ document.addEventListener("DOMContentLoaded", () => {
         handleGateDecision(esc.id, "APPROVED", "Approved by human medical reviewer.");
       });
       card.querySelector(".btn-gate-reject").addEventListener("click", () => {
-        handleGateDecision(esc.id, "REJECTED", "Classified as benign or non-actionable; persisted in review memory as monitoring-only.");
+        handleGateDecision(esc.id, "REJECTED", "Classified as benign or non-actionable; persisted in review memory as rejected.");
+      });
+      card.querySelector(".btn-gate-monitor").addEventListener("click", () => {
+        handleGateDecision(esc.id, "MONITORING", "Persisted for longitudinal safety monitoring only.");
       });
       card.querySelector(".btn-gate-clarify").addEventListener("click", () => {
         handleGateDecision(esc.id, "CLARIFY", "Clarification requested regarding baseline transaminases and concomitant medication history.");
       });
+
+      // Fact check button listener
+      const fcBtn = card.querySelector(".fact-check-btn");
+      const fcInput = card.querySelector(`#fc-input-${esc.id}`);
+      if (fcBtn && fcInput) {
+        fcBtn.addEventListener("click", async () => {
+          const qText = fcInput.value.trim() || `Check baseline screening ALT and concomitant medication history for ${esc.target_id}`;
+          fcBtn.disabled = true;
+          fcBtn.textContent = "Checking...";
+          try {
+            const fcRes = await fetch("/api/monitor/fact-check", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ escalation_id: esc.id, query: qText }),
+            });
+            if (fcRes.ok) {
+              const fcData = await fcRes.json();
+              const resultWrap = card.querySelector(`#fc-result-wrap-${esc.id}`);
+              if (resultWrap) {
+                resultWrap.innerHTML = `<div class="fact-check-result-card"><strong>Fact Check Result:</strong> ${escapeHtml(fcData.fact_check_result || "Verified against StudyGraph.")}</div>`;
+              }
+            }
+          } catch (e) {
+            console.error("Fact check error:", e);
+          } finally {
+            fcBtn.disabled = false;
+            fcBtn.textContent = "Fact Check";
+          }
+        });
+      }
+
+      // Doctor comment listener
+      const docBtn = card.querySelector(".doctor-comment-btn");
+      const docInput = card.querySelector(`#doc-comment-input-${esc.id}`);
+      if (docBtn && docInput) {
+        docBtn.addEventListener("click", async () => {
+          const noteText = docInput.value.trim();
+          if (!noteText) return;
+          docBtn.disabled = true;
+          try {
+            const cRes = await fetch("/api/monitor/comment", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ escalation_id: esc.id, comment: noteText, doctor_name: "Dr. Clinical Reviewer" }),
+            });
+            if (cRes.ok) {
+              const cData = await cRes.json();
+              docInput.value = "";
+              const trail = card.querySelector(`#doc-comments-trail-${esc.id}`);
+              if (trail && cData.comments) {
+                trail.innerHTML = cData.comments.map((c) => `<div class="comment-bubble"><strong>${escapeHtml(c.author || "Reviewer")}:</strong> ${escapeHtml(c.comment || "")} <span style="font-size: 0.68rem; color: var(--text-muted); float: right;">${escapeHtml(c.timestamp ? c.timestamp.split("T")[1]?.slice(0, 8) || "" : "")}</span></div>`).join("");
+              }
+            }
+          } catch (e) {
+            console.error("Comment error:", e);
+          } finally {
+            docBtn.disabled = false;
+          }
+        });
+      }
 
       const subjBtn = card.querySelector(".interactive-subject-pill");
       if (subjBtn) {
