@@ -1,0 +1,651 @@
+"""ATLAS Production Web Server & API Layer.
+
+Hosts the browser application and serves the deterministic clinical intelligence API.
+Built entirely using Python standard libraries (http.server) with zero external dependencies.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import re
+import sys
+import time
+from http import HTTPStatus
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, unquote, urlparse
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from stage1.atlas import Atlas, StudyGraph
+from starter.schemas import Question
+from stage2.crew import ReviewCrew
+from stage2.models import GateDecision
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("atlas.server")
+
+# Global instances initialized on startup
+GRAPH: Optional[StudyGraph] = None
+ATLAS_ENGINE: Optional[Atlas] = None
+DATA_DIR_PATH: Optional[Path] = None
+REVIEW_CREW: Optional[ReviewCrew] = None
+
+PUBLIC_DEMO_QUESTIONS = [
+    {
+        "question_id": "Q004",
+        "category": "Liver Safety",
+        "text": "Which subjects meet potential Hy's law criteria?",
+    },
+    {
+        "question_id": "Q005",
+        "category": "Liver Safety",
+        "text": "Which subjects at site S07 meet potential Hy's law criteria?",
+    },
+    {
+        "question_id": "Q002",
+        "category": "Discontinuation",
+        "text": "How many subjects at site S11 discontinued due to an adverse event?",
+    },
+    {
+        "question_id": "Q007",
+        "category": "Dosing Deviations",
+        "text": "Which subjects at site S09 received a wrong dose?",
+    },
+    {
+        "question_id": "Q009",
+        "category": "Safety / SAE",
+        "text": "Which subjects at site S05 have serious adverse events?",
+    },
+    {
+        "question_id": "Q008",
+        "category": "Protocol Amendments",
+        "text": "Which subjects took prohibited concomitant medications?",
+    },
+    {
+        "question_id": "Q003",
+        "category": "Record Lookup",
+        "text": "List the laboratory and adverse-event records for 042-S05-003 within 7 days of the WEEK8 visit",
+    },
+    {
+        "question_id": "Q006",
+        "category": "Dosing Deviations",
+        "text": "Which subjects at site S01 received a wrong dose?",
+    },
+    {
+        "question_id": "Q001",
+        "category": "Discontinuation",
+        "text": "How many subjects at site S07 discontinued due to an adverse event?",
+    },
+    {
+        "question_id": "Q010",
+        "category": "Dosing Deviations",
+        "text": "Which subjects at site S02 received a wrong dose?",
+    },
+]
+
+
+
+class AtlasRequestHandler(SimpleHTTPRequestHandler):
+    """HTTP Request Handler serving both REST API endpoints and web client assets."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        web_dir = PROJECT_ROOT / "web"
+        super().__init__(*args, directory=str(web_dir), **kwargs)
+
+    def _send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
+        """Helper to send a JSON HTTP response."""
+        encoded = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def end_headers(self) -> None:
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
+    def do_OPTIONS(self) -> None:
+        """Handle CORS pre-flight requests."""
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        """Handle GET requests for API endpoints and static assets."""
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+
+        if path == "/api/health":
+            self._handle_health()
+        elif path == "/api/stats":
+            self._handle_stats()
+        elif path == "/api/subjects":
+            self._handle_subjects()
+        elif path.startswith("/api/patient/"):
+            usubjid = unquote(path[len("/api/patient/"):].strip())
+            self._handle_patient(usubjid)
+        elif path == "/api/public-questions":
+            self._send_json(PUBLIC_DEMO_QUESTIONS)
+        elif path == "/api/monitor/status":
+            self._handle_monitor_status()
+        elif path == "/api/monitor/report":
+            self._handle_monitor_report()
+        elif path == "/api/monitor/trace":
+            self._handle_monitor_trace()
+        elif path == "/api/monitor/escalations":
+            self._handle_monitor_escalations()
+        elif path == "/api/monitor/memory":
+            self._handle_monitor_memory()
+        else:
+            # Fallback to serving static frontend files
+            super().do_GET()
+
+    def do_POST(self) -> None:
+        """Handle POST requests for clinical questions."""
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+
+        if path == "/api/ask":
+            self._handle_ask()
+        elif path == "/api/monitor/cycle":
+            self._handle_monitor_cycle()
+        elif path == "/api/monitor/escalations/decision":
+            self._handle_monitor_decision()
+        else:
+            self._send_json({"error": "Endpoint not found"}, status=HTTPStatus.NOT_FOUND)
+
+    def _handle_health(self) -> None:
+        """GET /api/health"""
+        if GRAPH is None or ATLAS_ENGINE is None:
+            self._send_json({"status": "starting", "online": False}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        self._send_json({
+            "status": "online",
+            "study_id": "STUDY-042",
+            "active_cut": GRAPH.cut if GRAPH.cut is not None else 12,
+            "protocol_version": ATLAS_ENGINE.rules.protocol_version,
+            "subjects_enrolled": len(GRAPH.subjects),
+            "records_indexed": len(GRAPH.records_by_ref),
+            "build_time_ms": getattr(GRAPH, "build_time_ms", 220),
+        })
+
+    def _handle_stats(self) -> None:
+        """GET /api/stats"""
+        if GRAPH is None:
+            self._send_json({"error": "Graph not initialized"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        domain_counts: Dict[str, int] = {}
+        for (dom, usubjid, seq) in GRAPH.records_by_ref.keys():
+            domain_counts[dom] = domain_counts.get(dom, 0) + 1
+
+        sites_map: Dict[str, int] = {}
+        for usubjid, sdata in GRAPH.subjects.items():
+            site = sdata.get("site_id", "")
+            if site:
+                sites_map[site] = sites_map.get(site, 0) + 1
+
+        visits_set = set()
+        for usubjid, vmap in GRAPH.subject_visits.items():
+            for v in vmap.keys():
+                if v:
+                    visits_set.add(v)
+
+        stats = {
+            "nodes": len(GRAPH.nodes),
+            "edges": len(GRAPH.edges),
+            "subjects": len(GRAPH.subjects),
+            "subjects_covered": len(GRAPH.subjects),
+            "cut": GRAPH.cut,
+            "build_time_ms": getattr(GRAPH, "build_time_ms", 220),
+            "ms": getattr(GRAPH, "build_time_ms", 220),
+            "domains": domain_counts,
+            "sites_count": len(sites_map),
+            "sites": sites_map,
+            "visits_count": len(visits_set),
+            "visits": sorted(list(visits_set)),
+        }
+        self._send_json(stats)
+
+    def _normalize_query_text(self, text: str) -> str:
+        """Normalizes conversational user phrasing to canonical clinical entities."""
+        t = text.strip()
+        tl = t.lower()
+        # 'stopped treatment because of / due to an adverse event' -> 'discontinued due to an adverse event'
+        if ("stopped" in tl or "withdrew" in tl) and ("adverse" in tl or "ae" in tl) and "discontinu" not in tl:
+            t = re.sub(r"\b(stopped treatment|stopped|withdrew)\b", "discontinued", t, flags=re.IGNORECASE)
+            t = re.sub(r"\bbecause of\b", "due to", t, flags=re.IGNORECASE)
+        # 'show me what was recorded for ... around week 8'
+        if ("show me" in tl or "what was recorded" in tl) and "week" in tl:
+            if "list" not in tl and "lookup" not in tl:
+                subj_m = re.search(r"\b(\d{3}-s\d{2}-\d{3})\b", t, re.IGNORECASE)
+                week_m = re.search(r"\b(week\s*\d+)\b", t, re.IGNORECASE)
+                if subj_m and week_m:
+                    return f"List the laboratory and adverse-event records for {subj_m.group(1)} within 7 days of the {week_m.group(1).upper().replace(' ', '')} visit"
+        return t
+
+    def _handle_subjects(self) -> None:
+        """GET /api/subjects"""
+        if GRAPH is None:
+            self._send_json({"error": "Graph not initialized"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        subjects_summary = []
+        for usubjid in sorted(GRAPH.subjects.keys()):
+            sdata = GRAPH.subjects[usubjid]
+            subjects_summary.append({
+                "usubjid": usubjid,
+                "site_id": sdata.get("site_id", ""),
+                "arm": sdata.get("arm", ""),
+                "age": sdata.get("demographics", {}).get("AGE", ""),
+                "sex": sdata.get("demographics", {}).get("SEX", ""),
+            })
+
+        self._send_json({"count": len(subjects_summary), "subjects": subjects_summary})
+
+    def _handle_patient(self, usubjid: str) -> None:
+        """GET /api/patient/{usubjid}"""
+        if GRAPH is None:
+            self._send_json({"error": "Graph not initialized"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return
+
+        if not usubjid:
+            self._send_json({"error": "Subject ID required"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        p360 = GRAPH.patient360(usubjid)
+        if not p360 or not p360.get("records"):
+            self._send_json({
+                "found": False,
+                "usubjid": usubjid,
+                "message": f"Subject '{usubjid}' was not found in STUDY-042."
+            }, status=HTTPStatus.NOT_FOUND)
+            return
+
+        self._send_json({
+            "found": True,
+            "patient": p360,
+        })
+
+    def _classify_question_kind(self, text: str) -> str:
+        """Helper to tag display kind for the UI."""
+        t = text.lower()
+        if t.startswith("how many") or "count" in t or "number of" in t:
+            return "COUNT"
+        if "list" in t or "lookup" in t or "records for" in t:
+            return "LOOKUP"
+        if "wrong dose" in t and ("s01" in t or "s02" in t):
+            return "TRAP"
+        return "FINDING"
+
+    def _handle_ask(self) -> None:
+        """POST /api/ask"""
+        if ATLAS_ENGINE is None or GRAPH is None:
+            self._send_json({"error": "Engine not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json({"error": "Empty request body"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        raw_body = self.rfile.read(content_length)
+        try:
+            body = json.loads(raw_body.decode("utf-8"))
+        except Exception as e:
+            self._send_json({"error": f"Invalid JSON body: {e}"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        raw_question = body.get("question", "").strip()
+        if not raw_question:
+            self._send_json({"error": "Missing 'question' parameter"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        question_text = self._normalize_query_text(raw_question)
+        qid = body.get("question_id", "Q_USER")
+        q_kind = body.get("kind") or self._classify_question_kind(question_text)
+
+        start_time = time.perf_counter()
+        try:
+            q_obj = Question(question_id=qid, text=question_text, kind=q_kind.lower())
+            ans = ATLAS_ENGINE.answer(q_obj)
+            elapsed_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+
+            ans_dict = ans.to_dict()
+
+            # Enrich evidence with clinical context from the raw records in StudyGraph
+            enriched_evidence = []
+            for ev in ans_dict.get("evidence", []):
+                domain = ev.get("domain", "")
+                usubjid = ev.get("usubjid", "")
+                seq = ev.get("seq")
+
+                record_data = GRAPH.get_record(domain, usubjid, seq)
+                item: Dict[str, Any] = {
+                    "domain": domain,
+                    "usubjid": usubjid,
+                    "seq": seq,
+                    "citation": f"RecordRef(domain=\"{domain}\", usubjid=\"{usubjid}\", seq={seq})",
+                }
+
+                if record_data:
+                    # Provide concise preview details for rich card display
+                    item["visit"] = record_data.get("VISIT", "")
+                    date_val = (
+                        record_data.get(f"{domain}DTC")
+                        or record_data.get(f"{domain}STDTC")
+                        or record_data.get("LBDTC")
+                        or record_data.get("AESTDTC")
+                        or record_data.get("EXSTDTC")
+                        or record_data.get("CMSTDTC")
+                        or record_data.get("DSSTDTC")
+                        or ""
+                    )
+                    item["date"] = date_val
+
+                    if domain == "LB":
+                        item["testcd"] = record_data.get("LBTESTCD", "")
+                        item["raw_value"] = record_data.get("LBORRES", "")
+                        item["unit"] = record_data.get("LBORRESU", "")
+                        item["description"] = f"{item['testcd']}: {item['raw_value']} {item['unit']}"
+                    elif domain == "AE":
+                        item["term"] = record_data.get("AETERM", "")
+                        item["severity"] = record_data.get("AESEV", "")
+                        item["serious"] = record_data.get("AESER", "N")
+                        item["hospitalized"] = record_data.get("AESHOSP", "N")
+                        item["description"] = f"{item['term']} ({item['severity']})"
+                    elif domain == "EX":
+                        item["dose"] = record_data.get("EXDOSE", "")
+                        item["unit"] = record_data.get("EXDOSU", "mg")
+                        item["treatment"] = record_data.get("EXTRT", "")
+                        item["description"] = f"Dose {item['dose']} {item['unit']} ({item['treatment']})"
+                    elif domain == "CM":
+                        item["treatment"] = record_data.get("CMTRT", "")
+                        item["med_class"] = record_data.get("CMCLAS", "")
+                        item["description"] = f"{item['treatment']} [{item['med_class']}]"
+                    elif domain == "DS":
+                        item["decod"] = record_data.get("DSDECOD", "")
+                        item["term"] = record_data.get("DSTERM", "")
+                        item["description"] = f"{item['decod']}: {item['term'] or 'Normal'}"
+                    elif domain == "DM":
+                        item["arm"] = record_data.get("ARM", "")
+                        item["site"] = record_data.get("SITEID", "")
+                        item["description"] = f"Site {item['site']}, Arm {item['arm']}"
+                    else:
+                        item["description"] = f"{domain} Record #{seq}"
+
+                    # Attach raw attributes for expandable inspection
+                    item["raw_fields"] = {
+                        k: v for k, v in record_data.items()
+                        if not k.startswith("_") and k not in ("domain", "usubjid", "seq")
+                    }
+
+                enriched_evidence.append(item)
+
+            is_empty_trap = (len(enriched_evidence) == 0 and (ans.answer == [] or ans.answer == 0))
+
+            response_payload = {
+                "question_id": ans.question_id,
+                "question": question_text,
+                "kind": q_kind,
+                "answer": ans.answer,
+                "text": ans.text,
+                "evidence": enriched_evidence,
+                "evidence_count": len(enriched_evidence),
+                "confidence": ans.confidence,
+                "steps_used": ans.steps_used,
+                "tokens_used": 0,
+                "response_time_ms": elapsed_ms,
+                "is_empty_trap": is_empty_trap,
+            }
+            self._send_json(response_payload)
+
+        except Exception as e:
+            logger.exception("Error answering question: %s", question_text)
+            self._send_json({
+                "error": f"Internal execution error: {e}",
+                "question": question_text,
+            }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+
+
+    def _handle_monitor_status(self) -> None:
+        """GET /api/monitor/status"""
+        if REVIEW_CREW is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        last_rep = REVIEW_CREW.get_last_report()
+        if last_rep is None:
+            cut = getattr(GRAPH, "cut", 12) or 12
+            ver = ATLAS_ENGINE.rules.protocol_version if ATLAS_ENGINE else 3
+            last_rep = REVIEW_CREW.run_cycle(cut=cut, protocol_version=ver)
+
+        self._send_json({
+            "status": "online",
+            "cycle_count": REVIEW_CREW.cycle_count,
+            "active_cut": getattr(REVIEW_CREW.atlas.graph, "cut", 12) or 12,
+            "protocol_version": REVIEW_CREW.atlas.rules.protocol_version,
+            "memory": REVIEW_CREW.memory.to_dict(),
+            "trace_count": len(REVIEW_CREW.trace.get_entries()),
+            "has_report": True,
+            "last_report_summary": last_rep.summary if last_rep else "No cycles executed yet.",
+            "metrics": last_rep.metrics if last_rep else {},
+        })
+
+    def _handle_monitor_report(self) -> None:
+        """GET /api/monitor/report"""
+        if REVIEW_CREW is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        last_rep = REVIEW_CREW.get_last_report()
+        if last_rep is None:
+            cut = getattr(GRAPH, "cut", 12) or 12
+            ver = ATLAS_ENGINE.rules.protocol_version if ATLAS_ENGINE else 3
+            last_rep = REVIEW_CREW.run_cycle(cut=cut, protocol_version=ver)
+
+        rep_dict = last_rep.to_dict()
+        if REVIEW_CREW and REVIEW_CREW.memory:
+            rep_dict["all_escalations"] = [e.to_dict() for e in REVIEW_CREW.memory.escalations.values()]
+            rep_dict["all_queries"] = [q.to_dict() for q in REVIEW_CREW.memory.queries.values()]
+        self._send_json(rep_dict)
+
+    def _handle_monitor_trace(self) -> None:
+        """GET /api/monitor/trace"""
+        if REVIEW_CREW is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        entries = REVIEW_CREW.trace.to_list()
+        self._send_json({"count": len(entries), "entries": entries})
+
+    def _handle_monitor_escalations(self) -> None:
+        """GET /api/monitor/escalations"""
+        if REVIEW_CREW is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        last_rep = REVIEW_CREW.get_last_report()
+        if last_rep and last_rep.escalations:
+            escalations = [e.to_dict() for e in last_rep.escalations]
+        elif REVIEW_CREW and REVIEW_CREW.memory and REVIEW_CREW.memory.escalations:
+            escalations = [e.to_dict() for e in REVIEW_CREW.memory.escalations.values()]
+        else:
+            escalations = []
+        self._send_json({"count": len(escalations), "escalations": escalations})
+
+    def _handle_monitor_memory(self) -> None:
+        """GET /api/monitor/memory"""
+        if REVIEW_CREW is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+        self._send_json(REVIEW_CREW.memory.to_dict())
+
+    def _handle_monitor_cycle(self) -> None:
+        """POST /api/monitor/cycle"""
+        if REVIEW_CREW is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = {}
+        if content_length > 0:
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            except Exception:
+                body = {}
+
+        cut = int(body.get("cut", getattr(GRAPH, "cut", 12) or 12))
+        ver = int(body.get("protocol_version", ATLAS_ENGINE.rules.protocol_version if ATLAS_ENGINE else 3))
+
+        try:
+            report = REVIEW_CREW.run_cycle(cut=cut, protocol_version=ver)
+            self._send_json(report.to_dict())
+        except Exception as e:
+            logger.exception("ReviewCrew cycle failed: %s", e)
+            self._send_json({"error": f"Cycle run error: {e}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _handle_monitor_decision(self) -> None:
+        """POST /api/monitor/escalations/decision"""
+        if REVIEW_CREW is None:
+            self._send_json({"error": "ReviewCrew not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json({"error": "Empty body"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            esc_id = body.get("escalation_id")
+            decision = body.get("decision", "APPROVED").upper()
+            reason = body.get("reason", "Decision recorded by human reviewer.")
+
+            last_rep = REVIEW_CREW.get_last_report()
+            if not last_rep:
+                self._send_json({"error": "No active report"}, status=HTTPStatus.NOT_FOUND)
+                return
+
+            target_esc = next((e for e in last_rep.escalations if e.id == esc_id), None) if last_rep else None
+            if not target_esc and REVIEW_CREW and REVIEW_CREW.memory:
+                target_esc = next((e for e in REVIEW_CREW.memory.escalations.values() if e.id == esc_id), None)
+
+            if not target_esc:
+                self._send_json({"error": f"Escalation {esc_id} not found"}, status=HTTPStatus.NOT_FOUND)
+                return
+
+            if decision == "APPROVED":
+                target_esc.status = GateDecision.APPROVED
+                target_esc.gate_reason = reason
+                if target_esc not in last_rep.approved_escalations:
+                    last_rep.approved_escalations.append(target_esc)
+                if target_esc in last_rep.rejected_escalations:
+                    last_rep.rejected_escalations.remove(target_esc)
+                REVIEW_CREW.memory.record_escalation(target_esc)
+
+            elif decision == "REJECTED":
+                target_esc.status = GateDecision.REJECTED
+                target_esc.gate_reason = reason
+                if target_esc in last_rep.approved_escalations:
+                    last_rep.approved_escalations.remove(target_esc)
+                if target_esc not in last_rep.rejected_escalations:
+                    last_rep.rejected_escalations.append(target_esc)
+                REVIEW_CREW.memory.record_rejection(target_esc.key)
+
+            elif decision == "CLARIFY":
+                from stage2.escalations import resolve_monitor_clarification
+                question = body.get("question", target_esc.clarification_question or "What were the screening baseline transaminase values?")
+                resp_text = resolve_monitor_clarification(target_esc, REVIEW_CREW.atlas, question)
+                target_esc.status = GateDecision.CLARIFY
+                target_esc.clarification_question = question
+                target_esc.clarification_response = resp_text
+                if target_esc not in last_rep.clarified_escalations:
+                    last_rep.clarified_escalations.append(target_esc)
+
+            REVIEW_CREW.trace.record_step(
+                cycle=REVIEW_CREW.cycle_count,
+                node="human_gate",
+                action="MANUAL_DECISION_OVERRIDE",
+                details={"escalation_id": esc_id, "decision": decision, "reason": reason}
+            )
+
+            self._send_json({"status": "updated", "escalation": target_esc.to_dict()})
+
+        except Exception as e:
+            self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+
+
+def start_server(host: str = "127.0.0.1", port: int = 8080, data_dir: Optional[str] = None) -> None:
+    """Initializes StudyGraph, Atlas Engine, and launches the HTTP Server."""
+    global GRAPH, ATLAS_ENGINE, DATA_DIR_PATH, REVIEW_CREW
+
+    resolved_data_dir = (
+        Path(data_dir)
+        if data_dir
+        else PROJECT_ROOT / "DATASET-20260918T152607Z-1-001" / "DATASET" / "hackathon-data" / "hackathon-data"
+    )
+
+    if not resolved_data_dir.exists():
+        logger.error("Dataset directory not found: %s", resolved_data_dir)
+        sys.exit(1)
+
+    DATA_DIR_PATH = resolved_data_dir
+    print("=" * 64)
+    print("  ATLAS — Clinical Study Intelligence Browser Platform")
+    print("=" * 64)
+    print(f"Loading StudyGraph from: {resolved_data_dir}")
+
+    GRAPH = StudyGraph(str(resolved_data_dir))
+    stats = GRAPH.build()
+    GRAPH.build_time_ms = stats["build_time_ms"]
+
+    ATLAS_ENGINE = Atlas(GRAPH)
+    REVIEW_CREW = ReviewCrew(atlas=ATLAS_ENGINE)
+
+    print(f"Graph initialized in {stats['build_time_ms']} ms:")
+    print(f"  • Subjects: {stats['subjects']}")
+    print(f"  • Nodes:    {stats['nodes']}")
+    print(f"  • Edges:    {stats['edges']}")
+    print("=" * 64)
+
+    server = ThreadingHTTPServer((host, port), AtlasRequestHandler)
+    url = f"http://{host}:{port}"
+    print(f"Server online at: {url}")
+    print("Press Ctrl+C to stop.")
+    print("=" * 64)
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down ATLAS server...")
+        server.server_close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="ATLAS Production Web Application Server")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8080, help="Port number (default: 8080)")
+    parser.add_argument("--data", type=str, default=None, help="Path to hackathon study data directory")
+    args = parser.parse_args()
+
+    start_server(host=args.host, port=args.port, data_dir=args.data)

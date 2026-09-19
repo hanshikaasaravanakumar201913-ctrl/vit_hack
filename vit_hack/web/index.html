@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ATLAS — Clinical Study Intelligence</title>
+  <link rel="stylesheet" href="style.css?v=2.5.0">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'><path d='M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5'/></svg>">
+</head>
+<body>
+
+  <!-- APP SHELL -->
+  <div class="app-shell">
+
+    <!-- GLOBAL TOP NAVIGATION -->
+    <header class="app-header">
+      <div class="header-inner">
+        
+        <!-- Left: Brand Identity -->
+        <div class="brand-block" id="nav-brand" role="button" tabindex="0" title="Return to Ask ATLAS">
+          <div class="brand-mark">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <circle cx="4" cy="6" r="2"></circle>
+              <circle cx="20" cy="6" r="2"></circle>
+              <circle cx="4" cy="18" r="2"></circle>
+              <circle cx="20" cy="18" r="2"></circle>
+              <line x1="6" y1="7" x2="10" y2="11"></line>
+              <line x1="18" y1="7" x2="14" y2="11"></line>
+              <line x1="6" y1="17" x2="10" y2="13"></line>
+              <line x1="18" y1="17" x2="14" y2="13"></line>
+            </svg>
+          </div>
+          <div class="brand-text">
+            <span class="brand-name">ATLAS</span>
+            <span class="brand-separator">/</span>
+            <span class="brand-tagline">Clinical Study Intelligence</span>
+          </div>
+        </div>
+
+        <!-- Center: Primary Navigation Tabs -->
+        <nav class="main-nav" role="tablist" aria-label="Main Application Navigation">
+          <button class="nav-item active" data-tab="ask" role="tab" aria-selected="true">
+            Ask ATLAS
+          </button>
+          <button class="nav-item" data-tab="graph" role="tab" aria-selected="false">
+            Study Graph
+          </button>
+          <button class="nav-item" data-tab="patient" role="tab" aria-selected="false">
+            Patient 360
+          </button>
+          <button class="nav-item" data-tab="rules" role="tab" aria-selected="false">
+            Protocol & Rules
+          </button>
+          <button class="nav-item" data-tab="monitor" role="tab" aria-selected="false">
+            ReviewCrew Monitor
+          </button>
+        </nav>
+
+        <!-- Right: Study Context & System Status -->
+        <div class="header-meta">
+          <div class="meta-item">
+            <span class="meta-label">Study</span>
+            <span class="meta-val">STUDY-042</span>
+          </div>
+          <div class="meta-divider"></div>
+          <div class="meta-item">
+            <span class="meta-label">Active Cut</span>
+            <span class="meta-val" id="header-cut-badge">Cut 12 (v3.0)</span>
+          </div>
+          <div class="meta-divider"></div>
+          <div class="system-status-indicator" title="Deterministic engine connected and operational">
+            <span class="status-dot"></span>
+            <span class="status-label">Online</span>
+          </div>
+        </div>
+
+      </div>
+    </header>
+
+    <!-- MAIN VIEWPORT -->
+    <main class="app-viewport">
+
+      <!-- ===================================================================
+           TAB 1: ASK ATLAS (CLINICAL INVESTIGATION WORKSPACE)
+           =================================================================== -->
+      <section id="tab-ask" class="tab-view active">
+        
+        <div class="page-container">
+          
+          <!-- Workspace Header -->
+          <div class="page-header text-center">
+            <h1 class="page-title">ATLAS</h1>
+            <p class="page-subtitle">Clinical study intelligence</p>
+            <p class="page-description">
+              Ask questions across the study data and trace every answer to its evidence.
+            </p>
+          </div>
+
+          <!-- Question Input Workspace -->
+          <div class="query-box-container">
+            <div class="query-input-wrapper">
+              <div class="query-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+              </div>
+              <input 
+                type="text" 
+                id="query-input" 
+                placeholder="Ask about subjects, dosing, labs, adverse events, or protocol rules…" 
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button id="clear-btn" class="input-clear-btn" title="Clear search" style="display: none;">✕</button>
+              <button id="ask-btn" class="btn-primary btn-search">
+                <span class="btn-text">Ask ATLAS</span>
+                <span class="btn-spinner" style="display: none;"></span>
+              </button>
+            </div>
+
+            <!-- Session Query History -->
+            <div class="query-history-bar" id="query-history-bar" style="display: none;">
+              <span class="history-label">Recent:</span>
+              <div class="history-chips" id="history-chips"></div>
+            </div>
+          </div>
+
+          <!-- Suggested Questions (Clean Text Buttons) -->
+          <div class="suggested-questions-section">
+            <div class="suggested-header">Suggested questions</div>
+            <div class="suggested-pills" id="showcase-chips-grid">
+              <!-- Dynamically populated via JS, fallback static items -->
+              <button class="suggested-pill" data-query="Which subjects had dosing deviations at S09?">Which subjects had dosing deviations at S09?</button>
+              <button class="suggested-pill" data-query="Which subjects meet potential Hy's law criteria?">Which subjects meet Hy's law criteria?</button>
+              <button class="suggested-pill" data-query="Which subjects took prohibited concomitant medications?">Which subjects are taking prohibited medications?</button>
+              <button class="suggested-pill" data-query="Show me patient 042-S05-003">Show me patient 042-S05-003</button>
+              <button class="suggested-pill" data-query="How many subjects at site S11 discontinued due to an adverse event?">How many subjects at site S11 discontinued due to an adverse event?</button>
+            </div>
+          </div>
+
+          <!-- Loading State -->
+          <div id="loading-state" class="query-loading-panel" style="display: none;">
+            <div class="loading-spinner"></div>
+            <div class="loading-text">Analyzing study dataset and validating evidence citations…</div>
+          </div>
+
+          <!-- Investigation Results Area -->
+          <div id="results-area" class="results-container" style="display: none;">
+            <!-- Injected dynamically via JS -->
+          </div>
+
+          <!-- Subtle Telemetry Summary Strip -->
+          <div class="telemetry-strip">
+            <div class="telemetry-strip-item">
+              <span class="telemetry-k">Cohort:</span>
+              <span class="telemetry-v" id="stat-subjects">241 Subjects</span>
+            </div>
+            <div class="telemetry-strip-divider">•</div>
+            <div class="telemetry-strip-item">
+              <span class="telemetry-k">Investigational Sites:</span>
+              <span class="telemetry-v" id="stat-sites">12 Sites</span>
+            </div>
+            <div class="telemetry-strip-divider">•</div>
+            <div class="telemetry-strip-item">
+              <span class="telemetry-k">Graph Nodes:</span>
+              <span class="telemetry-v" id="stat-nodes">29,578</span>
+            </div>
+            <div class="telemetry-strip-divider">•</div>
+            <div class="telemetry-strip-item">
+              <span class="telemetry-k">Indexed Edges:</span>
+              <span class="telemetry-v" id="stat-edges">29,566</span>
+            </div>
+            <div class="telemetry-strip-divider">•</div>
+            <div class="telemetry-strip-item">
+              <span class="telemetry-k">Query Latency:</span>
+              <span class="telemetry-v" id="stat-latency">&lt; 20 ms</span>
+            </div>
+          </div>
+
+          <!-- Hidden telemetry targets for app.js safety -->
+          <div style="display: none;">
+            <span id="stat-labs">14,400</span>
+            <span id="stat-vitals">7,200</span>
+            <span id="stat-doses">2,154</span>
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================================
+           TAB 2: STUDY GRAPH (CONNECTED KNOWLEDGE GRAPH)
+           =================================================================== -->
+      <section id="tab-graph" class="tab-view">
+        
+        <div class="graph-full-page-container">
+          
+          <!-- Graph Page Header -->
+          <div class="graph-header-bar">
+            <div>
+              <h1 class="page-title-sm">Study Graph</h1>
+              <p class="page-description-sm">
+                Explore how study data connects across subjects, visits, and clinical domains.
+              </p>
+            </div>
+            
+            <!-- View Mode Switcher -->
+            <div class="segmented-control">
+              <button class="seg-btn active" id="btn-view-study" type="button">Study View</button>
+              <button class="seg-btn" id="btn-view-patient" type="button">Patient View</button>
+            </div>
+          </div>
+
+          <!-- Graph Toolbar & Patient Selector -->
+          <div class="graph-toolbar">
+            <div class="toolbar-search-wrap">
+              <label for="graph-patient-input" class="toolbar-label">Search patient:</label>
+              <div class="input-with-button">
+                <input 
+                  type="text" 
+                  id="graph-patient-input" 
+                  list="graph-subjects-datalist" 
+                  placeholder="e.g. 042-S07-001" 
+                  autocomplete="off"
+                />
+                <datalist id="graph-subjects-datalist"></datalist>
+                <button id="graph-focus-btn" class="btn-primary" type="button">Focus Patient Graph</button>
+              </div>
+            </div>
+
+            <!-- Quick Patient Shortcuts -->
+            <div class="toolbar-quick-patients">
+              <span class="toolbar-label">Notable cases:</span>
+              <div class="quick-patient-links" id="graph-quick-patients-list">
+                <button class="quick-patient-chip" type="button" data-usubjid="042-S07-001">042-S07-001 (Hy's Law S07)</button>
+                <button class="quick-patient-chip" type="button" data-usubjid="042-S05-003">042-S05-003 (Hy's Law Wk8)</button>
+                <button class="quick-patient-chip" type="button" data-usubjid="042-S08-014">042-S08-014 (Hy's Law)</button>
+                <button class="quick-patient-chip" type="button" data-usubjid="042-S09-004">042-S09-004 (20mg Dose)</button>
+                <button class="quick-patient-chip" type="button" data-usubjid="042-S05-006">042-S05-006 (Hospitalized SAE)</button>
+                <button class="quick-patient-chip" type="button" data-usubjid="042-S01-001">042-S01-001 (0 AEs)</button>
+              </div>
+            </div>
+
+            <!-- Zoom / Pan Buttons -->
+            <div class="toolbar-zoom-group">
+              <button class="btn-icon" id="btn-zoom-in" type="button" title="Zoom in">+</button>
+              <button class="btn-icon" id="btn-zoom-out" type="button" title="Zoom out">−</button>
+              <button class="btn-icon" id="btn-zoom-reset" type="button" title="Reset view">↺</button>
+            </div>
+          </div>
+
+          <!-- Main Graph Workspace: Canvas + Right Inspector -->
+          <div class="graph-workspace-grid">
+            
+            <!-- Left/Center: SVG Canvas Workspace -->
+            <div class="canvas-card" id="graph-canvas-container">
+              
+              <div class="canvas-status-bar">
+                <div class="canvas-mode-indicator" id="canvas-mode-badge">
+                  <span class="indicator-dot"></span>
+                  <span id="canvas-mode-text">STUDY-042 GLOBAL ARCHITECTURE</span>
+                </div>
+                <div class="canvas-hint" id="canvas-help-hint">
+                  Click any node to inspect connected clinical records
+                </div>
+              </div>
+
+              <!-- SVG Canvas Viewport -->
+              <div class="svg-viewport-wrapper" id="svg-viewport-wrapper">
+                <svg id="graph-svg-canvas" viewBox="0 0 960 640" preserveAspectRatio="xMidYMid meet">
+                  <g id="graph-root-group" transform="translate(0, 0) scale(1)">
+                    <g id="svg-edges-layer"></g>
+                    <g id="svg-nodes-layer"></g>
+                    <g id="svg-labels-layer"></g>
+                  </g>
+                </svg>
+              </div>
+
+              <div class="canvas-footer-bar">
+                <span class="footer-note">Interactive vector graph • Click and drag to pan • Scroll to zoom</span>
+                <button class="btn-text-link" id="btn-canvas-center" type="button">Center patient node</button>
+              </div>
+
+            </div>
+
+            <!-- Right: Node Details / Inspector Panel -->
+            <aside class="inspector-card-panel">
+              <div class="inspector-panel-inner" id="graph-node-inspector">
+                <div class="inspector-header">
+                  <div class="inspector-category-badge" id="insp-type">STUDY ROOT</div>
+                  <h3 class="inspector-headline" id="insp-title">STUDY-042 Cohort</h3>
+                </div>
+                <div class="inspector-content" id="insp-body">
+                  <p class="inspector-summary">
+                    Select any node in the visual graph or choose a patient above to inspect their connected clinical records.
+                  </p>
+                  <div class="inspector-table" id="insp-stats">
+                    <div class="insp-stat-row">
+                      <span class="insp-k">Total Enrolled</span>
+                      <span class="insp-v">241 Subjects</span>
+                    </div>
+                    <div class="insp-stat-row">
+                      <span class="insp-k">Investigational Sites</span>
+                      <span class="insp-v">12 Sites</span>
+                    </div>
+                    <div class="insp-stat-row">
+                      <span class="insp-k">Graph Nodes</span>
+                      <span class="insp-v">29,578</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="inspector-footer" id="insp-actions">
+                  <button class="btn-secondary w-100" id="insp-action-btn">Focus patient (042-S07-001)</button>
+                </div>
+              </div>
+            </aside>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================================
+           TAB 3: PATIENT 360 (LONGITUDINAL CLINICAL PROFILE)
+           =================================================================== -->
+      <section id="tab-patient" class="tab-view">
+        
+        <div class="page-container">
+          
+          <div class="page-header">
+            <h1 class="page-title-sm">Patient 360</h1>
+            <p class="page-description-sm">
+              Longitudinal clinical trajectory across protocol visits, laboratory tests, dosing compliance, and adverse event timelines.
+            </p>
+          </div>
+
+          <!-- Subject Selection Card -->
+          <div class="patient-search-card">
+            <div class="patient-search-row">
+              <div class="search-input-group">
+                <label for="patient-search-input" class="field-label">Search patient (USUBJID):</label>
+                <div class="input-with-button">
+                  <input 
+                    type="text" 
+                    id="patient-search-input" 
+                    list="subjects-datalist" 
+                    placeholder="e.g. 042-S07-001" 
+                    autocomplete="off" 
+                  />
+                  <datalist id="subjects-datalist"></datalist>
+                  <button id="patient-load-btn" class="btn-primary">Load patient</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Highlighted Quick-Access Patients -->
+            <div class="patient-quick-list">
+              <span class="field-label">Notable patient cases:</span>
+              <div class="quick-patient-buttons">
+                <button class="notable-chip" data-subj="042-S07-001">042-S07-001 (Hy's Law S07)</button>
+                <button class="notable-chip" data-subj="042-S05-003">042-S05-003 (Hy's Law Wk8)</button>
+                <button class="notable-chip" data-subj="042-S08-014">042-S08-014 (Hy's Law)</button>
+                <button class="notable-chip" data-subj="042-S09-004">042-S09-004 (20mg Dose)</button>
+                <button class="notable-chip" data-subj="042-S05-006">042-S05-006 (Hospitalized SAE)</button>
+                <button class="notable-chip" data-subj="042-S01-001">042-S01-001 (0 AEs)</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Patient Profile Workspace -->
+          <div id="patient-profile-area" class="patient-profile-workspace">
+            <div class="empty-state-panel">
+              <div class="empty-state-title">No patient loaded</div>
+              <p class="empty-state-desc">Select a notable patient above or enter a USUBJID to view their longitudinal records.</p>
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ===================================================================
+           TAB 4: PROTOCOL & RULES (CLINICAL RULEBOOK)
+           =================================================================== -->
+      <section id="tab-rules" class="tab-view">
+        
+        <div class="page-container">
+          
+          <div class="page-header">
+            <h1 class="page-title-sm">Protocol & Rules</h1>
+            <p class="page-description-sm">
+              Deterministic protocol amendments, laboratory reference ranges, dosing schedules, and safety criteria.
+            </p>
+          </div>
+
+          <div class="rules-workspace-layout">
+            
+            <!-- Left: Version Selector -->
+            <aside class="rules-sidebar">
+              <div class="sidebar-title">Protocol versions</div>
+              <nav class="version-nav" id="protocol-version-nav">
+                <button class="version-nav-item active" data-version="v3">
+                  <div class="version-num">v3.0</div>
+                  <div class="version-meta">Amendment 3 • Cuts 9–12 (Active)</div>
+                </button>
+                <button class="version-nav-item" data-version="v2">
+                  <div class="version-num">v2.0</div>
+                  <div class="version-meta">Amendment 2 • Cuts 5–8</div>
+                </button>
+                <button class="version-nav-item" data-version="v1">
+                  <div class="version-num">v1.0</div>
+                  <div class="version-meta">Original Protocol • Cuts 1–4</div>
+                </button>
+              </nav>
+
+              <div class="sidebar-summary-box">
+                <div class="summary-box-title">Active Cut Rules</div>
+                <p class="summary-box-text">
+                  Evaluations in ATLAS apply rules for the effective data cut. Currently operating under <strong>Cut 12 (v3.0)</strong>.
+                </p>
+              </div>
+            </aside>
+
+            <!-- Right: Rules Documentation Content -->
+            <div class="rules-content-body">
+              
+              <!-- Section 1: Version Overview -->
+              <div class="doc-section">
+                <h2 class="doc-section-title">Protocol evolution & amendment history</h2>
+                <div class="doc-table-container">
+                  <table class="doc-table">
+                    <thead>
+                      <tr>
+                        <th>Version</th>
+                        <th>Effective Cuts</th>
+                        <th>Visit Window</th>
+                        <th>Prohibited Medications</th>
+                        <th>Key Changes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td><strong>v1.0</strong></td>
+                        <td>Cuts 1–4</td>
+                        <td>±7 days</td>
+                        <td>Systemic Glucocorticoids (Prednisolone)</td>
+                        <td>Initial trial design with nominal visit schedule.</td>
+                      </tr>
+                      <tr>
+                        <td><strong>v2.0</strong></td>
+                        <td>Cuts 5–8</td>
+                        <td>±3 days</td>
+                        <td>Systemic Glucocorticoids</td>
+                        <td>Tightened visit window to ±3 days; added Serum Creatinine &gt; 1.5 mg/dL exclusion; corrected 200 central lab records.</td>
+                      </tr>
+                      <tr class="table-row-highlight">
+                        <td><strong>v3.0 (Active)</strong></td>
+                        <td>Cuts 9–12</td>
+                        <td>±3 days</td>
+                        <td>Glucocorticoids + Sulfonylureas (Glibenclamide)</td>
+                        <td>Expanded prohibited concomitant medications to include Sulfonylureas. Cohort re-audited for protocol adherence.</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Section 2: Laboratory Reference Limits Matrix -->
+              <div class="doc-section">
+                <h2 class="doc-section-title">Laboratory reference ranges & unit harmonization</h2>
+                <div class="doc-table-container">
+                  <table class="doc-table">
+                    <thead>
+                      <tr>
+                        <th>Analyte</th>
+                        <th>Parameter Code</th>
+                        <th>Reference Range</th>
+                        <th>Unit</th>
+                        <th>Laboratory Facility</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Alanine Aminotransferase</td><td>ALT</td><td>7.0 – 56.0</td><td>U/L</td><td>Central Laboratory</td></tr>
+                      <tr><td>Aspartate Aminotransferase</td><td>AST</td><td>10.0 – 40.0</td><td>U/L</td><td>Central Laboratory</td></tr>
+                      <tr><td>Total Bilirubin</td><td>BILI</td><td>0.1 – 1.2</td><td>mg/dL</td><td>Central Laboratory</td></tr>
+                      <tr><td>Glycated Hemoglobin</td><td>HBA1C</td><td>4.0 – 5.6</td><td>%</td><td>Central Laboratory</td></tr>
+                      <tr><td>Fasting Blood Glucose</td><td>GLUC</td><td>70.0 – 99.0</td><td>mg/dL</td><td>Central Laboratory</td></tr>
+                      <tr><td>Serum Creatinine</td><td>CREAT</td><td>0.6 – 1.2</td><td>mg/dL</td><td>Central Laboratory</td></tr>
+                      <tr class="table-row-accent">
+                        <td>Alanine Aminotransferase (Site S07)</td>
+                        <td>ALT</td>
+                        <td>0.12 – 0.93</td>
+                        <td>μkat/L</td>
+                        <td>Site S07 Local Laboratory</td>
+                      </tr>
+                      <tr class="table-row-accent">
+                        <td>Aspartate Aminotransferase (Site S07)</td>
+                        <td>AST</td>
+                        <td>0.17 – 0.67</td>
+                        <td>μkat/L</td>
+                        <td>Site S07 Local Laboratory</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div class="callout-note">
+                  <strong>Site S07 unit conversion rule:</strong> Site S07 records transaminases in μkat/L. ATLAS converts to standard units dynamically using the standard clinical conversion: <code>1 μkat/L = 60 U/L</code>. For example, 3.995 μkat/L equals 239.7 U/L (&gt; 3× ULN).
+                </div>
+              </div>
+
+              <!-- Section 3: Dosing & Arm Compliance Rules -->
+              <div class="doc-section">
+                <h2 class="doc-section-title">Dosing schedule & exposure rules</h2>
+                <p class="doc-paragraph">
+                  Subjects are randomized 1:1 at Baseline to active investigational drug or matching placebo:
+                </p>
+                <div class="doc-grid-2">
+                  <div class="info-block">
+                    <div class="info-block-title">Active Drug Arm (DRUG)</div>
+                    <p class="info-block-text">Administered dose is strictly <strong>10 mg</strong> per scheduled protocol visit (Baseline through Week 24).</p>
+                  </div>
+                  <div class="info-block">
+                    <div class="info-block-title">Placebo Arm (PLACEBO)</div>
+                    <p class="info-block-text">Administered dose is strictly <strong>0 mg</strong> per scheduled protocol visit.</p>
+                  </div>
+                </div>
+                <div class="callout-note">
+                  <strong>Deviation criteria:</strong> Any subject receiving a dose not concordant with their randomized arm (e.g. 20 mg instead of 10 mg, or &gt; 0 mg in placebo) is deterministically flagged as a dosing deviation. At Site S09, 6 subjects received 20 mg across multiple visits.
+                </div>
+              </div>
+
+              <!-- Section 4: Safety & Hy's Law Criteria -->
+              <div class="doc-section">
+                <h2 class="doc-section-title">Liver safety (Hy's law) & serious adverse events</h2>
+                <p class="doc-paragraph">
+                  To detect drug-induced liver injury, ATLAS deterministically implements the FDA Hy's law guidance:
+                </p>
+                <div class="criteria-list">
+                  <div class="criteria-item">
+                    <span class="criteria-num">1</span>
+                    <span><strong>Transaminase Elevation:</strong> Serum ALT &gt; 3× ULN (or AST &gt; 3× ULN).</span>
+                  </div>
+                  <div class="criteria-item">
+                    <span class="criteria-num">2</span>
+                    <span><strong>Hyperbilirubinemia:</strong> Total Bilirubin &gt; 2× ULN.</span>
+                  </div>
+                  <div class="criteria-item">
+                    <span class="criteria-num">3</span>
+                    <span><strong>Temporal Window:</strong> Bilirubin collected within 14 days of qualifying transaminase elevation.</span>
+                  </div>
+                </div>
+                <div class="callout-note">
+                  <strong>Serious Adverse Events (SAE):</strong> Per protocol Section 6, any adverse event resulting in inpatient hospitalization (<code>AESHOSP = Y</code>) is classified as a Serious Adverse Event (SAE), regardless of the investigator's initial seriousness assessment.
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- ===================================================================
+           TAB 5: MONITOR (REVIEWCREW CONTROL ROOM & HUMAN-IN-THE-LOOP GATE)
+           =================================================================== -->
+      <section id="tab-monitor" class="tab-view">
+        <div class="page-container">
+          
+          <!-- Monitor Header Bar -->
+          <div class="monitor-header-bar">
+            <div>
+              <div class="monitor-badge-row">
+                <span class="badge-stage">STAGE 2 • MONITOR</span>
+                <span class="badge-neutral" id="mon-cycle-badge">Cycle 1</span>
+                <span class="badge-neutral" id="mon-cut-badge">Cut 12</span>
+                <span class="badge-neutral" id="mon-proto-badge">Protocol v3.0</span>
+              </div>
+              <h1 class="page-title-sm">ReviewCrew Autonomous Safety & Compliance Monitor</h1>
+              <p class="page-description-sm">
+                Multi-agent 6-node clinical review engine: deterministic anomaly detection, safety triage, query generation, protocol compliance, and human-in-the-loop oversight.
+              </p>
+            </div>
+
+            <!-- Cycle Trigger Controls -->
+            <div class="monitor-controls-group">
+              <div class="control-param-group">
+                <label for="mon-cut-select" class="control-label">Data Cut:</label>
+                <select id="mon-cut-select" class="mon-select">
+                  <option value="12" selected>Cut 12 (Complete Cohort)</option>
+                  <option value="8">Cut 8 (Amendment 2)</option>
+                  <option value="4">Cut 4 (Amendment 1)</option>
+                  <option value="2">Cut 2 (Early Cut)</option>
+                  <option value="1">Cut 1 (Baseline Ingestion)</option>
+                </select>
+              </div>
+
+              <div class="control-param-group">
+                <label for="mon-proto-select" class="control-label">Protocol:</label>
+                <select id="mon-proto-select" class="mon-select">
+                  <option value="3" selected>v3.0 (Sulfonylureas Prohibited)</option>
+                  <option value="2">v2.0 (±3d Window, Creatinine)</option>
+                  <option value="1">v1.0 (Original Protocol)</option>
+                </select>
+              </div>
+
+              <button id="btn-run-cycle" class="btn-primary" type="button">
+                <span id="btn-run-text">Run Review Cycle</span>
+              </button>
+              <button id="btn-rerun-dedup" class="btn-secondary" type="button" title="Rerun current cut to verify 0 queries and 0 escalations deduplication">
+                Verify Deduplication
+              </button>
+            </div>
+          </div>
+
+          <!-- 6-Node Architecture Progress Ribbon -->
+          <div class="crew-nodes-ribbon">
+            <div class="crew-node-item active" id="node-step-detect">
+              <div class="node-num">1</div>
+              <div class="node-info">
+                <span class="node-name">Detect</span>
+                <span class="node-sub">Atlas Signals & Citations</span>
+              </div>
+            </div>
+            <div class="node-connector">→</div>
+            <div class="crew-node-item active" id="node-step-medical">
+              <div class="node-num">2</div>
+              <div class="node-info">
+                <span class="node-name">Medical Review</span>
+                <span class="node-sub">SAE Miscoded & Hy's Law</span>
+              </div>
+            </div>
+            <div class="node-connector">→</div>
+            <div class="crew-node-item active" id="node-step-dm">
+              <div class="node-num">3</div>
+              <div class="node-info">
+                <span class="node-name">Data Manager</span>
+                <span class="node-sub">Queries & Site Replies</span>
+              </div>
+            </div>
+            <div class="node-connector">→</div>
+            <div class="crew-node-item active" id="node-step-compliance">
+              <div class="node-num">4</div>
+              <div class="node-info">
+                <span class="node-name">Compliance</span>
+                <span class="node-sub">Protocol Amendments</span>
+              </div>
+            </div>
+            <div class="node-connector">→</div>
+            <div class="crew-node-item active" id="node-step-gate">
+              <div class="node-num">5</div>
+              <div class="node-info">
+                <span class="node-name">Human Gate</span>
+                <span class="node-sub">Approve / Reject / Clarify</span>
+              </div>
+            </div>
+            <div class="node-connector">→</div>
+            <div class="crew-node-item active" id="node-step-execute">
+              <div class="node-num">6</div>
+              <div class="node-info">
+                <span class="node-name">Execute</span>
+                <span class="node-sub">Repeated & Site Clusters</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Key Metrics Strip -->
+          <div class="monitor-metrics-strip">
+            <div class="mon-stat-card">
+              <span class="mon-stat-k">Raw Signals</span>
+              <span class="mon-stat-v" id="stat-mon-findings">0</span>
+              <span class="mon-stat-sub">CDISC Ground-Truth</span>
+            </div>
+            <div class="mon-stat-card">
+              <span class="mon-stat-k">Queries Raised</span>
+              <span class="mon-stat-v" id="stat-mon-queries">0</span>
+              <span class="mon-stat-sub" id="stat-mon-queries-closed">0 closed by site</span>
+            </div>
+            <div class="mon-stat-card">
+              <span class="mon-stat-k">Approved Escalations</span>
+              <span class="mon-stat-v text-success" id="stat-mon-approved">0</span>
+              <span class="mon-stat-sub">Safety & Deviations</span>
+            </div>
+            <div class="mon-stat-card">
+              <span class="mon-stat-k">Rejected (Persisted)</span>
+              <span class="mon-stat-v text-muted" id="stat-mon-rejected">0</span>
+              <span class="mon-stat-sub">Monitoring-Only</span>
+            </div>
+            <div class="mon-stat-card">
+              <span class="mon-stat-k">Clarifications Solved</span>
+              <span class="mon-stat-v text-accent" id="stat-mon-clarified">0</span>
+              <span class="mon-stat-sub">StudyGraph Grounded</span>
+            </div>
+            <div class="mon-stat-card">
+              <span class="mon-stat-k">Repeated Subjects</span>
+              <span class="mon-stat-v" id="stat-mon-repeated">0</span>
+              <span class="mon-stat-sub">Multi-Cycle Hold</span>
+            </div>
+            <div class="mon-stat-card">
+              <span class="mon-stat-k">Site Clusters</span>
+              <span class="mon-stat-v text-danger" id="stat-mon-clusters">0</span>
+              <span class="mon-stat-sub">&gt;= 3 Deviations</span>
+            </div>
+          </div>
+
+          <!-- Main Monitor Workspace Tabs: Escalations, Queries, Audit Trace, Memory -->
+          <div class="monitor-workspace-container">
+            
+            <div class="monitor-subnav-bar">
+              <div class="segmented-control" id="mon-subnav">
+                <button class="seg-btn active" data-subview="escalations" id="btn-sub-escalations" type="button">Human Gate Escalations</button>
+                <button class="seg-btn" data-subview="queries" id="btn-sub-queries" type="button">Site Data Queries</button>
+                <button class="seg-btn" data-subview="trace" id="btn-sub-trace" type="button">6-Node Audit Trace</button>
+                <button class="seg-btn" data-subview="memory" id="btn-sub-memory" type="button">Longitudinal Memory</button>
+              </div>
+              <div class="subnav-meta">
+                <span id="mon-subview-count">0 Items</span>
+              </div>
+            </div>
+
+            <!-- Subview 1: Human Gate Escalations -->
+            <div class="mon-subview active" id="mon-subview-escalations">
+              <div class="escalations-queue-container" id="escalations-queue-list">
+                <div class="loading-state-card">
+                  <div class="loading-pulse-ring"></div>
+                  <div class="loading-text">Loading ReviewCrew Escalations Queue...</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Subview 2: Site Data Queries -->
+            <div class="mon-subview" id="mon-subview-queries" style="display: none;">
+              <div class="table-frame">
+                <table class="clinical-data-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 110px;">Query ID</th>
+                      <th style="width: 75px;">Domain</th>
+                      <th style="width: 130px;">Subject</th>
+                      <th style="width: 60px;">Seq</th>
+                      <th style="width: 160px;">Query Type</th>
+                      <th>Query Description</th>
+                      <th style="width: 200px;">Site Response & Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="mon-queries-tbody">
+                    <!-- Dynamically populated -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Subview 3: 6-Node Audit Trace -->
+            <div class="mon-subview" id="mon-subview-trace" style="display: none;">
+              <div class="trace-timeline-list" id="mon-trace-timeline">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+
+            <!-- Subview 4: Longitudinal Memory -->
+            <div class="mon-subview" id="mon-subview-memory" style="display: none;">
+              <div class="memory-dashboard-grid" id="mon-memory-grid">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+
+          </div>
+
+        </div>
+      </section>
+
+    </main>
+
+    <!-- COMPACT FOOTER -->
+    <footer class="app-footer">
+      <div class="footer-inner">
+        <div class="footer-left">
+          ATLAS • Clinical Study Intelligence Platform
+        </div>
+        <div class="footer-right">
+          STUDY-042 Phase III Cohort • Deterministic CDISC Reasoning • 0 Tokens
+        </div>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="app.js?v=2.5.0"></script>
+</body>
+</html>
