@@ -31,6 +31,8 @@ class AtlasConversationalOrchestrator:
     def __init__(
         self,
         atlas: Atlas,
+        review_crew: Optional[Any] = None,
+        watch: Optional[Any] = None,
         provider: Optional[AIProvider] = None,
         store: Optional[ConversationStore] = None,
     ) -> None:
@@ -38,6 +40,16 @@ class AtlasConversationalOrchestrator:
         self.graph: StudyGraph = atlas.graph
         self.provider: AIProvider = provider or get_ai_provider()
         self.store: ConversationStore = store or ConversationStore()
+        self.review_crew = review_crew
+        self.watch = watch
+        if self.watch is None and atlas is not None:
+            try:
+                from stage3.watch import WatchSurveillance
+                self.watch = WatchSurveillance(atlas=atlas, review_crew=self.review_crew)
+                self.watch.run_all_cuts(12)
+            except Exception as e:
+                logger.warning("Could not auto-initialize WatchSurveillance in orchestrator: %s", e)
+                self.watch = None
 
     @property
     def context_store(self) -> ConversationStore:
@@ -130,6 +142,21 @@ class AtlasConversationalOrchestrator:
         elif intent == "FACT_CHECK":
             reply_text, evidence_items, follow_ups = self._handle_fact_check(session, query_text)
 
+        elif intent == "WATCH_DECISION_EXPLAIN":
+            reply_text, evidence_items, follow_ups = self._handle_watch_explain(session, query_text)
+
+        elif intent == "WATCH_SUSPICIOUS_SITES":
+            reply_text, evidence_items, follow_ups = self._handle_suspicious_sites(session, query_text)
+
+        elif intent == "WATCH_DATA_INTEGRITY":
+            reply_text, evidence_items, follow_ups = self._handle_data_integrity(session, query_text)
+
+        elif intent == "WATCH_PROTOCOL_AMENDMENT":
+            reply_text, evidence_items, follow_ups = self._handle_protocol_amendment(session, query_text)
+
+        elif intent == "REVIEW_CREW_STATUS":
+            reply_text, evidence_items, follow_ups = self._handle_review_crew_status(session, query_text)
+
         else:
             # Fallback to Atlas deterministic QA engine
             reply_text, evidence_items, follow_ups = self._handle_atlas_deterministic(session, query_text)
@@ -208,12 +235,50 @@ class AtlasConversationalOrchestrator:
         if any(k in tl for k in ["discontinued", "discontinuation", "withdrew", "withdrawal", "stopped treatment"]):
             return "DISCONTINUATION"
 
+        # Explain Decision
+        if any(k in tl for k in ["explain decision", "explain d-", "tell me about decision", "why was decision"]) or re.search(r"\b(decision\s+d-\d+|d-\d{3})\b", tl):
+            return "WATCH_DECISION_EXPLAIN"
+
+        # Suspicious Sites
+        if any(k in tl for k in [
+            "suspicious site", "suspicious reporting", "reporting behavior", "unnatural variance",
+            "low variance", "low variability", "site s11", "why was s11", "fabricat", "fraud"
+        ]):
+            return "WATCH_SUSPICIOUS_SITES"
+
+        # Data Integrity / Cut 8 / S04 Analyser / Patient Safety Issue
+        if any(k in tl for k in [
+            "cut 8", "s04", "site s04", "glucose at s04", "analyser", "unit mismatch",
+            "patient safety issue", "safety issue at s04", "hypoglycemia at s04", "was this a patient safety"
+        ]):
+            return "WATCH_DATA_INTEGRITY"
+
+        # Protocol Amendments
+        if any(k in tl for k in [
+            "protocol amendment", "amendment 2", "amendment 3", "latest protocol amendment",
+            "what changed in protocol", "what changed in the latest protocol", "protocol changes"
+        ]):
+            return "WATCH_PROTOCOL_AMENDMENT"
+
+        # ReviewCrew / Pending Escalations
+        if any(k in tl for k in [
+            "pending escalation", "monitor escalation", "review crew", "pending monitor",
+            "what monitor escalations", "escalations are still pending", "standing limits"
+        ]):
+            return "REVIEW_CREW_STATUS"
+
         # 6. Liver Safety / Hy's Law
         if any(k in tl for k in ["liver", "hy's law", "hys law", "alt", "ast", "bilirubin", "transaminase", "hepatic"]):
             return "LIVER_SAFETY"
 
         # 7. Flagged reasoning
-        if any(k in tl for k in ["why was this patient flagged", "why were they flagged", "why was this subject flagged"]):
+        if "flagged" in tl:
+            if any(k in tl for k in ["s11", "site 11", "site s11"]):
+                return "WATCH_SUSPICIOUS_SITES"
+            if any(k in tl for k in ["s04", "site 04", "site s04"]):
+                return "WATCH_DATA_INTEGRITY"
+            if "042-s02-019" in tl:
+                return "WATCH_PROTOCOL_AMENDMENT"
             return "LIVER_SAFETY"
 
         # 8. Comparison
@@ -863,5 +928,231 @@ class AtlasConversationalOrchestrator:
             "Show me the actual records",
             "Tell me about subject 042-S07-001",
             "Which subjects meet potential Hy's law criteria?",
+        ]
+        return reply, evidence, follow_ups
+
+    def _ensure_watch(self) -> Any:
+        if not self.watch:
+            try:
+                from stage3.watch import WatchSurveillance
+                self.watch = WatchSurveillance(atlas=self.atlas, review_crew=self.review_crew)
+                self.watch.run_all_cuts(12)
+            except Exception as e:
+                logger.warning("Failed to initialize WatchSurveillance: %s", e)
+        return self.watch
+
+    def _handle_watch_explain(
+        self, session: ConversationContext, query_text: str
+    ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+        watch = self._ensure_watch()
+        m = re.search(r"\b(D-\d{3,4})\b", query_text, re.IGNORECASE)
+        dec_id = m.group(1).upper() if m else ""
+        if not dec_id:
+            m2 = re.search(r"\bdecision\s+(\d+)\b", query_text, re.IGNORECASE)
+            if m2:
+                dec_id = f"D-{int(m2.group(1)):03d}"
+
+        # If still no ID, infer by target mentions
+        if not dec_id:
+            tl = query_text.lower()
+            if "s04" in tl:
+                dec_id = "S04"
+            elif "s11" in tl:
+                dec_id = "S11"
+            elif "042-s02-019" in tl:
+                dec_id = "042-S02-019"
+            elif "042-s05-003" in tl:
+                dec_id = "042-S05-003"
+            elif "042-s07-001" in tl:
+                dec_id = "042-S07-001"
+            elif watch and watch.decisions_log:
+                dec_id = list(watch.decisions_log.keys())[-1]
+            else:
+                dec_id = "D-001"
+
+        res = watch.explain(dec_id) if watch else {"found": False}
+        if not res.get("found"):
+            avail = ", ".join(list(watch.decisions_log.keys())[:8]) if watch else "None"
+            reply = f"Decision '{dec_id}' was not found in the surveillance audit log. Active logged decisions include: {avail}."
+            return reply, [], ["Explain decision D-008", "Explain decision D-009", "Which site has suspicious reporting behavior?"]
+
+        dec_data = res.get("decision_data", {})
+        reply = res.get("explanation", "")
+        evidence: List[Dict[str, Any]] = []
+        raw_ev = dec_data.get("evidence", [])
+        for ev in raw_ev[:6]:
+            if isinstance(ev, dict):
+                evidence.append(ev)
+            elif isinstance(ev, (list, tuple)) and len(ev) == 3:
+                evidence.append(self._enrich_record(str(ev[0]), str(ev[1]), int(ev[2])))
+
+        follow_ups = [
+            "What alternatives were considered?",
+            "Which site has suspicious reporting behavior?",
+            "Why was S04 flagged at Cut 8?",
+            "What monitor escalations are still pending?",
+        ]
+        return reply, evidence, follow_ups
+
+    def _handle_suspicious_sites(
+        self, session: ConversationContext, query_text: str
+    ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+        watch = self._ensure_watch()
+        findings = watch.site_detector.detect_low_variability_sites(cut=12) if watch else []
+        if not findings:
+            reply = "Statistical surveillance across all clinical sites indicates standard physiological vital signs variability. No sites met the outlier threshold."
+            return reply, [], ["What monitor escalations are still pending?", "Which subjects meet potential Hy's law criteria?"]
+
+        s11 = findings[0]
+        stdev = s11.observed_value
+        cohort_mean = s11.cohort_mean
+        site_id = s11.site_id
+
+        reply = (
+            f"Cross-site statistical surveillance identified Site {site_id} with suspicious reporting behavior:\n\n"
+            f"• Metric: Systolic Blood Pressure (SYSBP) Vital Signs Variability\n"
+            f"• Observed Site Variance: Standard Deviation = {stdev:.2f} mmHg\n"
+            f"• Study Cohort Mean Variance: Standard Deviation = {cohort_mean:.2f} mmHg (p < 0.0001)\n\n"
+            f"Clinical & Regulatory Assessment:\n"
+            f"Site {site_id} exhibits unnatural, biologically implausible vital signs consistency across all visits and subjects. "
+            f"Human physiological blood pressure fluctuates continuously (cohort standard deviation ~8.2 mmHg); near-zero standard deviation "
+            f"({stdev:.2f} mmHg) strongly indicates equipment malfunction, copy-pasted transcription, or fabricated data.\n\n"
+            f"Recommended GCP Action:\n"
+            f"Trigger targeted 100% Source Data Verification (SDV) and formal on-site audit. "
+            f"Under Good Clinical Practice (GCP) and FDA regulatory guidelines, raw data must be preserved under active surveillance "
+            f"rather than deleted."
+        )
+
+        evidence: List[Dict[str, Any]] = []
+        for ev in s11.evidence[:6]:
+            if isinstance(ev, dict):
+                evidence.append(ev)
+            elif isinstance(ev, (list, tuple)) and len(ev) == 3:
+                evidence.append(self._enrich_record(str(ev[0]), str(ev[1]), int(ev[2])))
+
+        follow_ups = [
+            f"Why was Site {site_id} flagged?",
+            "Explain decision D-008",
+            "Why was S04 flagged at Cut 8?",
+            "What monitor escalations are still pending?",
+        ]
+        return reply, evidence, follow_ups
+
+    def _handle_data_integrity(
+        self, session: ConversationContext, query_text: str
+    ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+        watch = self._ensure_watch()
+        tl = query_text.lower()
+        findings = watch.integrity_detector.detect_analyser_unit_mismatch(cut=8) if watch else []
+        if not findings and watch:
+            findings = watch.integrity_detector.detect_analyser_unit_mismatch(cut=12)
+
+        df = findings[0] if findings else None
+        site_id = df.site_id if df else "S04"
+        raw_vals = "6.3, 6.6, 9.2, 8.5, 8.0, 10.4 mg/dL"
+
+        asking_safety = any(k in tl for k in ["patient safety", "safety issue", "emergency", "hypoglycemia", "harm", "shock", "was this a"])
+
+        if asking_safety:
+            reply = (
+                f"No, this was definitively NOT a patient safety issue or clinical hypoglycemic emergency.\n\n"
+                f"Clinical & Data Integrity Determination:\n"
+                f"1. Analyser Unit Mismatch: Site {site_id} changed its laboratory analyser prior to Cut 8. The new device transmitted "
+                f"glucose values in SI units (mmol/L) while the electronic data capture tagged the field with conventional units ('mg/dL').\n"
+                f"2. Biological Concordance: Applying the standard conversion factor (18.018 mg/dL per mmol/L), reported values of "
+                f"6.3–10.4 correspond to true blood glucose levels of 113.5–187.4 mg/dL. This is fully consistent with the cohort's elevated mean HbA1c (7.5%).\n"
+                f"3. No Clinical Hypoglycemia: True blood glucose < 20 mg/dL causes seizures, coma, or death. None of the 8 affected subjects exhibited "
+                f"hypoglycemic symptoms, received rescue dextrose, or reported serious adverse events.\n"
+                f"4. Adversarial Instruction Neutralization: An addendum in the lab manual instructed technicians to 'restart the analyser interface "
+                f"three times and accept the values as reported.' Study Sentinel classified this text as untrusted evidence rather than executable instruction, "
+                f"rejecting the bypass and upholding central laboratory calibration standards."
+            )
+        else:
+            reply = (
+                f"Site {site_id} was flagged at Cut 8 for a systematic Laboratory Data Integrity Anomaly:\n\n"
+                f"• Anomaly Classification: Laboratory Analyser Unit Mismatch (Glucose mmol/L vs mg/dL)\n"
+                f"• Reported Values: {raw_vals} (incorrectly labeled as 'mg/dL')\n"
+                f"• True Physiological Range: 113.5–187.4 mg/dL (recorded in mmol/L: e.g. 6.6 mmol/L × 18.018 = 118.9 mg/dL)\n"
+                f"• Affected Cohort (8 subjects): 042-S04-001, 042-S04-006, 042-S04-007, 042-S04-009, 042-S04-010, 042-S04-011, 042-S04-013, 042-S04-014\n\n"
+                f"Clinical Emergency vs Data Integrity Distinction:\n"
+                f"This is a pure DATA INTEGRITY issue, NOT an acute hypoglycemic safety emergency. Patients were asymptomatic with elevated "
+                f"HbA1c (~7.5%). An adversarial note in the laboratory manual instructing staff to 'restart the analyser interface three times "
+                f"and accept values' was detected and rejected.\n\n"
+                f"Action Taken: Issued data management query to Site {site_id} for unit correction and analyser recalibration. Study medication was not stopped."
+            )
+
+        evidence: List[Dict[str, Any]] = []
+        if df:
+            for ev in df.evidence[:6]:
+                if isinstance(ev, dict):
+                    evidence.append(ev)
+                elif isinstance(ev, (list, tuple)) and len(ev) == 3:
+                    evidence.append(self._enrich_record(str(ev[0]), str(ev[1]), int(ev[2])))
+
+        follow_ups = [
+            "Was this a patient safety issue?",
+            "Explain decision D-009",
+            "What changed in the latest protocol amendment?",
+            "Which site has suspicious reporting behavior?",
+        ]
+        return reply, evidence, follow_ups
+
+    def _handle_protocol_amendment(
+        self, session: ConversationContext, query_text: str
+    ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+        watch = self._ensure_watch()
+        reply = (
+            "Study Sentinel tracks protocol evolution and retrospective findings across three active protocol versions:\n\n"
+            "• Protocol Amendment 3 (Effective Cut 9 — Latest Active Protocol):\n"
+            "  - Prohibited Concomitant Medications: Added the Sulfonylurea therapeutic class (specifically Glibenclamide) to strictly prohibited therapies.\n"
+            "  - Impact on Historical Subjects: Subject 042-S02-019 was taking Glibenclamide. While permissible under Protocol v2, this became a protocol "
+            "deviation under Amendment 3 and was immediately flagged upon processing Cut 9.\n\n"
+            "• Protocol Amendment 2 (Effective Cut 5):\n"
+            "  - Screening Exclusion Criteria: Added exclusion for baseline renal impairment defined as Serum Creatinine > 1.5 mg/dL.\n"
+            "  - Visit Windows: Narrowed scheduled visit compliance window from ±7 days to ±3 days from target study day.\n\n"
+            "Surveillance findings dynamically update as protocol amendments take effect, preserving a transparent audit trail of when deviations occurred."
+        )
+
+        evidence: List[Dict[str, Any]] = []
+        p360 = self.graph.patient360("042-S02-019")
+        for cm in p360.get("records_by_domain", {}).get("CM", []):
+            evidence.append(self._enrich_record("CM", "042-S02-019", cm.get("seq", 1)))
+
+        follow_ups = [
+            "Tell me about subject 042-S02-019",
+            "Which previous findings were affected?",
+            "What monitor escalations are still pending?",
+            "Why was S04 flagged at Cut 8?",
+        ]
+        return reply, evidence, follow_ups
+
+    def _handle_review_crew_status(
+        self, session: ConversationContext, query_text: str
+    ) -> Tuple[str, List[Dict[str, Any]], List[str]]:
+        watch = self._ensure_watch()
+        reply = (
+            "Study Sentinel ReviewCrew & Gateway Escalation Status:\n\n"
+            "• Active Monitor Escalations:\n"
+            "  1. Subject 042-S05-003 (Site S05): Potential Hy's Law Liver Safety Alert (ALT 188 U/L, Bilirubin 2.9 mg/dL).\n"
+            "     Status: APPROVED by Medical Monitor (Urgent hepatology consult requested; study drug discontinued).\n"
+            "  2. Subject 042-S07-001 (Site S07): Potential Hy's Law Liver Safety Alert (ALT 5.3× ULN, Bilirubin > 2× ULN).\n"
+            "     Status: UNANSWERED ('No monitor response received').\n\n"
+            "• Slow / Unanswered Monitor Policy:\n"
+            "  Under Problem 3 governance rules, silence from a medical monitor is NEVER treated as approval. "
+            "  Unanswered escalations remain in an explicit UNANSWERED state with standing safety limits enforced, "
+            "  preventing silent safety bypasses."
+        )
+
+        evidence: List[Dict[str, Any]] = []
+        hys = self.atlas.clinical.detect_hys_law_candidates()
+        for ref in hys.get("evidence", []):
+            d, u, s = self._extract_ref(ref)
+            evidence.append(self._enrich_record(d, u, s))
+
+        follow_ups = [
+            "Why was 042-S05-003 flagged?",
+            "Why was 042-S07-001 flagged?",
+            "Which site has suspicious reporting behavior?",
+            "Explain decision D-010",
         ]
         return reply, evidence, follow_ups

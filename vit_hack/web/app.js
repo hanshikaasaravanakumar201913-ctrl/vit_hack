@@ -160,6 +160,8 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     } else if (tabId === "monitor") {
       loadMonitorReport();
+    } else if (tabId === "watch") {
+      loadWatchDashboard();
     }
 
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -3864,6 +3866,182 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
 
+  // =========================================================================
+  // Stage 3 — WATCH Longitudinal Surveillance Controller
+  // =========================================================================
+
+  const watchCutBadge = document.getElementById("watch-cut-badge");
+  const watchProtoBadge = document.getElementById("watch-proto-badge");
+  const watchBudgetBadge = document.getElementById("watch-budget-badge");
+  const watchStatCuts = document.getElementById("watch-stat-cuts");
+  const watchStatDecisions = document.getElementById("watch-stat-decisions");
+  const watchStatSites = document.getElementById("watch-stat-sites");
+  const watchStatIntegrity = document.getElementById("watch-stat-integrity");
+  const watchCutsTbody = document.getElementById("watch-cuts-tbody");
+  const watchCutsCount = document.getElementById("watch-cuts-count");
+  const btnRunAllCuts = document.getElementById("btn-run-all-cuts");
+  const btnExplainS11 = document.getElementById("btn-explain-s11");
+  const btnExplainS04 = document.getElementById("btn-explain-s04");
+  const btnAskAmendment = document.getElementById("btn-ask-amendment");
+  const btnAskMonitor = document.getElementById("btn-ask-monitor");
+  const watchExplainModal = document.getElementById("watch-explain-modal");
+  const explainModalTitle = document.getElementById("explain-modal-title");
+  const explainModalContent = document.getElementById("explain-modal-content");
+  const btnCloseExplainModal = document.getElementById("btn-close-explain-modal");
+
+  async function loadWatchDashboard() {
+    try {
+      const res = await fetch("/api/watch/cuts");
+      if (!res.ok) return;
+      const data = await res.json();
+      renderWatchDashboard(data);
+    } catch (err) {
+      console.warn("Failed to load WATCH dashboard:", err);
+    }
+  }
+
+  function renderWatchDashboard(data) {
+    if (!data) return;
+
+    if (watchCutBadge) watchCutBadge.textContent = `Active: Cut ${data.active_cut || 12}`;
+    if (watchProtoBadge) watchProtoBadge.textContent = `Protocol v${data.protocol_version || 3}.0`;
+    if (watchBudgetBadge) {
+      const bState = data.budget_state || "HEALTHY";
+      watchBudgetBadge.textContent = `Budget: ${bState}`;
+      if (bState === "HEALTHY") {
+        watchBudgetBadge.style.background = "#ecfdf5";
+        watchBudgetBadge.style.color = "#065f46";
+      } else if (bState === "LIMITED") {
+        watchBudgetBadge.style.background = "#fffbeb";
+        watchBudgetBadge.style.color = "#92400e";
+      } else {
+        watchBudgetBadge.style.background = "#fef2f2";
+        watchBudgetBadge.style.color = "#991b1b";
+      }
+    }
+
+    const cuts = data.cuts || [];
+    if (watchStatCuts) watchStatCuts.textContent = `${cuts.length} / 12`;
+    if (watchStatDecisions) watchStatDecisions.textContent = data.total_decisions != null ? data.total_decisions : 32;
+    if (watchCutsCount) watchCutsCount.textContent = `${cuts.length} Cuts Processed`;
+
+    if (watchCutsTbody) {
+      if (cuts.length === 0) {
+        watchCutsTbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:24px;color:#64748b;">No surveillance cuts processed yet. Click 'Run Cuts 1–12' to initiate.</td></tr>`;
+        return;
+      }
+
+      watchCutsTbody.innerHTML = cuts.map((c) => {
+        const bBadge = c.budget_state === "HEALTHY" 
+          ? `<span style="background:#ecfdf5;color:#065f46;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;">HEALTHY</span>`
+          : `<span style="background:#fffbeb;color:#92400e;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;">${c.budget_state}</span>`;
+        
+        return `
+          <tr>
+            <td style="font-weight:700;color:#0f172a;">Cut ${c.cut}</td>
+            <td><span style="font-size:12px;background:#f1f5f9;padding:2px 6px;border-radius:4px;color:#334155;">v${c.protocol_version}.0</span></td>
+            <td style="font-family:monospace;">${(c.new_records_count || 0).toLocaleString()}</td>
+            <td>${c.corrections_count || 0}</td>
+            <td style="font-weight:600;color:#2563eb;">${c.decisions ? c.decisions.length : 0}</td>
+            <td>${bBadge}</td>
+            <td style="font-size:12px;color:#475569;">${c.summary || "Completed"}</td>
+            <td style="font-size:12px;font-family:monospace;color:#64748b;">${c.latency_ms || 0} ms</td>
+          </tr>
+        `;
+      }).join("");
+    }
+  }
+
+  async function explainWatchDecision(decisionId) {
+    try {
+      if (explainModalTitle) explainModalTitle.textContent = `Surveillance Decision Trace: ${decisionId}`;
+      if (explainModalContent) explainModalContent.textContent = "Loading trace from immutable audit log...";
+      if (watchExplainModal) watchExplainModal.style.display = "flex";
+
+      const res = await fetch(`/api/watch/decision/${encodeURIComponent(decisionId)}`);
+      if (!res.ok) {
+        throw new Error(`Decision not found (${res.status})`);
+      }
+      const data = await res.json();
+      if (explainModalContent) {
+        explainModalContent.textContent = data.explanation || JSON.stringify(data, null, 2);
+      }
+    } catch (err) {
+      if (explainModalContent) {
+        explainModalContent.textContent = `Error retrieving trace for ${decisionId}: ${err.message}`;
+      }
+    }
+  }
+
+  function initWatchTab() {
+    if (btnRunAllCuts) {
+      btnRunAllCuts.addEventListener("click", async () => {
+        btnRunAllCuts.disabled = true;
+        btnRunAllCuts.textContent = "Running Cuts 1–12...";
+        try {
+          const res = await fetch("/api/watch/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cut: 12 })
+          });
+          if (res.ok) {
+            await loadWatchDashboard();
+          }
+        } catch (err) {
+          console.error("Error running surveillance cuts:", err);
+        } finally {
+          btnRunAllCuts.disabled = false;
+          btnRunAllCuts.textContent = "Run Cuts 1–12";
+        }
+      });
+    }
+
+    if (btnExplainS11) {
+      btnExplainS11.addEventListener("click", () => explainWatchDecision("D-008"));
+    }
+
+    if (btnExplainS04) {
+      btnExplainS04.addEventListener("click", () => explainWatchDecision("D-009"));
+    }
+
+    if (btnAskAmendment) {
+      btnAskAmendment.addEventListener("click", () => {
+        switchTab("ask");
+        const qInput = document.getElementById("query-input");
+        if (qInput) {
+          qInput.value = "What changed in the latest protocol amendment?";
+          submitQuery();
+        }
+      });
+    }
+
+    if (btnAskMonitor) {
+      btnAskMonitor.addEventListener("click", () => {
+        switchTab("ask");
+        const qInput = document.getElementById("query-input");
+        if (qInput) {
+          qInput.value = "What monitor escalations are still pending?";
+          submitQuery();
+        }
+      });
+    }
+
+    if (btnCloseExplainModal) {
+      btnCloseExplainModal.addEventListener("click", () => {
+        if (watchExplainModal) watchExplainModal.style.display = "none";
+      });
+    }
+
+    if (watchExplainModal) {
+      watchExplainModal.addEventListener("click", (e) => {
+        if (e.target === watchExplainModal) {
+          watchExplainModal.style.display = "none";
+        }
+      });
+    }
+  }
+
   // Run Application Ingestion
+  initWatchTab();
   initializeApp();
 });

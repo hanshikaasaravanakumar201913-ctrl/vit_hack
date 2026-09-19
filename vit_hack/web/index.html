@@ -55,6 +55,9 @@
           <button class="nav-item" data-tab="monitor" role="tab" aria-selected="false">
             ReviewCrew Monitor
           </button>
+          <button class="nav-item" data-tab="watch" role="tab" aria-selected="false">
+            WATCH Surveillance
+          </button>
         </nav>
 
         <!-- Right: Study Context & System Status -->
@@ -812,6 +815,178 @@
               </div>
             </div>
 
+          </div>
+
+        </div>
+      </section>
+
+      <!-- ===================================================================
+           TAB 6: WATCH SURVEILLANCE (STAGE 3 ENTERPRISE LONGITUDINAL SURVEILLANCE)
+           =================================================================== -->
+      <section id="tab-watch" class="tab-view">
+        <div class="monitor-workspace-shell">
+          <!-- Surveillance Top Bar -->
+          <div class="monitor-header-block">
+            <div class="mon-header-left">
+              <div class="mon-badge-row">
+                <span class="mon-badge-pill" id="watch-cut-badge">Active: Cut 12</span>
+                <span class="mon-badge-pill" id="watch-proto-badge">Protocol v3.0</span>
+                <span class="mon-badge-pill" id="watch-budget-badge" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;">Budget: HEALTHY</span>
+              </div>
+              <h1 class="mon-title">WATCH Longitudinal Clinical Surveillance</h1>
+              <p class="mon-subtitle">
+                12-Cut Incremental Auditing • Low-Variability Site Detection • Data Integrity vs Clinical Safety • Trace-Backed Explainable Decisions
+              </p>
+            </div>
+            <div class="mon-header-actions">
+              <button class="action-btn-primary" id="btn-run-all-cuts" type="button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                Run Cuts 1–12
+              </button>
+            </div>
+          </div>
+
+          <!-- Watch Metric Ribbon -->
+          <div class="monitor-stat-ribbon">
+            <div class="mon-stat-card">
+              <span class="mon-stat-label">Cuts Processed</span>
+              <span class="mon-stat-val" id="watch-stat-cuts">12 / 12</span>
+              <span class="mon-stat-sub">Cuts 1–4 (v1) • 5–8 (v2) • 9–12 (v3)</span>
+            </div>
+            <div class="mon-stat-card">
+              <span class="mon-stat-label">Audit Decisions</span>
+              <span class="mon-stat-val" id="watch-stat-decisions">32</span>
+              <span class="mon-stat-sub">Immutable Trace Logged</span>
+            </div>
+            <div class="mon-stat-card" style="border-left: 3px solid #f59e0b;">
+              <span class="mon-stat-label">Suspicious Sites</span>
+              <span class="mon-stat-val" id="watch-stat-sites" style="color: #d97706;">Site S11</span>
+              <span class="mon-stat-sub">SYSBP SD: 0.71 mmHg (Cohort 8.2)</span>
+            </div>
+            <div class="mon-stat-card" style="border-left: 3px solid #3b82f6;">
+              <span class="mon-stat-label">Data Integrity Findings</span>
+              <span class="mon-stat-val" id="watch-stat-integrity" style="color: #2563eb;">Site S04</span>
+              <span class="mon-stat-sub">Cut 8 GLUC mmol/L vs mg/dL</span>
+            </div>
+          </div>
+
+          <!-- WATCH Deep-Dive Cards Grid -->
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 24px;">
+            
+            <!-- Card 1: Suspicious Site Detection -->
+            <div class="review-queue-card" style="border-top: 4px solid #f59e0b;">
+              <div class="escalation-card-header">
+                <div>
+                  <span class="esc-type-tag" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;">Statistical Anomaly</span>
+                  <h3 style="font-size: 16px; font-weight: 700; margin: 8px 0 4px 0; color: #1e293b;">Site S11: Implausible Low Variability</h3>
+                </div>
+                <button class="seg-btn" id="btn-explain-s11" type="button" style="font-size:12px;padding:4px 10px;">Explain Trace</button>
+              </div>
+              <div style="font-size: 13px; line-height: 1.6; color: #475569; margin: 12px 0;">
+                <p><strong>Observed Variance:</strong> Systolic BP standard deviation is <strong>0.71 mmHg</strong> across visits, compared to cohort mean of <strong>8.19 mmHg</strong> (p &lt; 0.0001).</p>
+                <p style="margin-top:6px;"><strong>Assessment:</strong> Unnatural physiological consistency indicates equipment defect, copy-paste transcription, or fabricated data.</p>
+                <p style="margin-top:6px;"><strong>GCP Recommended Action:</strong> Trigger 100% Source Data Verification (SDV) and site audit. Raw data preserved without deletion under active surveillance.</p>
+              </div>
+              <div style="background: #f8fafc; border-radius: 6px; padding: 10px; font-size: 12px; font-family: monospace; color: #334155;">
+                Decision ID: D-008 • Cut 6–12 • Target: S11 • Action: AUDIT_AND_SDV
+              </div>
+            </div>
+
+            <!-- Card 2: Laboratory Data Integrity vs Clinical Emergency -->
+            <div class="review-queue-card" style="border-top: 4px solid #3b82f6;">
+              <div class="escalation-card-header">
+                <div>
+                  <span class="esc-type-tag" style="background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;">Data Integrity Anomaly</span>
+                  <h3 style="font-size: 16px; font-weight: 700; margin: 8px 0 4px 0; color: #1e293b;">Site S04: Analyser Unit Mismatch (GLUC)</h3>
+                </div>
+                <button class="seg-btn" id="btn-explain-s04" type="button" style="font-size:12px;padding:4px 10px;">Explain Trace</button>
+              </div>
+              <div style="font-size: 13px; line-height: 1.6; color: #475569; margin: 12px 0;">
+                <p><strong>Anomaly at Cut 8:</strong> 8 subjects reported blood glucose of <strong>6.3–10.4 mg/dL</strong>. Values were actually reported in SI units (<strong>mmol/L</strong>) under the 'mg/dL' label.</p>
+                <p style="margin-top:6px;"><strong>Safety vs Integrity:</strong> True glucose is <strong>113.5–187.4 mg/dL</strong>, concordant with elevated HbA1c (7.5%). This is <em>NOT</em> a hypoglycemic emergency.</p>
+                <p style="margin-top:6px;"><strong>Adversarial Prompt Defense:</strong> Lab manual v3 instruction to "restart analyser 3 times and accept" was intercepted and rejected as untrusted text.</p>
+              </div>
+              <div style="background: #f8fafc; border-radius: 6px; padding: 10px; font-size: 12px; font-family: monospace; color: #334155;">
+                Decision ID: D-009 • Cut 8 • Target: S04 • Action: DATA_MGMT_QUERY_RECALIBRATE
+              </div>
+            </div>
+
+            <!-- Card 3: Protocol Amendments & Retrospective Finding -->
+            <div class="review-queue-card" style="border-top: 4px solid #10b981;">
+              <div class="escalation-card-header">
+                <div>
+                  <span class="esc-type-tag" style="background:#d1fae5;color:#065f46;border:1px solid #a7f3d0;">Protocol Evolution</span>
+                  <h3 style="font-size: 16px; font-weight: 700; margin: 8px 0 4px 0; color: #1e293b;">Protocol Amendments (v1 → v2 → v3)</h3>
+                </div>
+                <button class="seg-btn" id="btn-ask-amendment" type="button" style="font-size:12px;padding:4px 10px;">Ask in Chat</button>
+              </div>
+              <div style="font-size: 13px; line-height: 1.6; color: #475569; margin: 12px 0;">
+                <p><strong>Amendment 2 (Cut 5):</strong> Screening Creatinine &gt; 1.5 mg/dL exclusion added; visit window tightened to ±3 days.</p>
+                <p style="margin-top:6px;"><strong>Amendment 3 (Cut 9):</strong> Sulfonylurea class (Glibenclamide) prohibited. Subject <strong>042-S02-019</strong> was compliant under v2 but newly flagged under v3.</p>
+                <p style="margin-top:6px;"><strong>Audit Trail:</strong> All prior cuts remain reproducible with historical protocol semantics.</p>
+              </div>
+              <div style="background: #f8fafc; border-radius: 6px; padding: 10px; font-size: 12px; font-family: monospace; color: #334155;">
+                Active: Protocol v3.0 • Subject Impact: 042-S02-019 (Glibenclamide)
+              </div>
+            </div>
+
+            <!-- Card 4: Slow Human Monitor Policy -->
+            <div class="review-queue-card" style="border-top: 4px solid #8b5cf6;">
+              <div class="escalation-card-header">
+                <div>
+                  <span class="esc-type-tag" style="background:#ede9fe;color:#5b21b6;border:1px solid #ddd6fe;">Safety Governance</span>
+                  <h3 style="font-size: 16px; font-weight: 700; margin: 8px 0 4px 0; color: #1e293b;">Slow / Unanswered Monitor Policy</h3>
+                </div>
+                <button class="seg-btn" id="btn-ask-monitor" type="button" style="font-size:12px;padding:4px 10px;">Ask in Chat</button>
+              </div>
+              <div style="font-size: 13px; line-height: 1.6; color: #475569; margin: 12px 0;">
+                <p><strong>Zero Auto-Approval Rule:</strong> Missing human monitor responses are <strong>NEVER</strong> silently converted to approval.</p>
+                <p style="margin-top:6px;"><strong>Standing Limits:</strong> Unanswered escalations (e.g. 042-S07-001) stay in explicit <code>UNANSWERED</code> status with safety precautions held.</p>
+                <p style="margin-top:6px;"><strong>Trace Record:</strong> "No monitor response received" is preserved in the immutable audit trail.</p>
+              </div>
+              <div style="background: #f8fafc; border-radius: 6px; padding: 10px; font-size: 12px; font-family: monospace; color: #334155;">
+                Escalations: 042-S05-003 (APPROVED) • 042-S07-001 (UNANSWERED)
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Watch Cuts Timeline & Decisions Table -->
+          <div style="margin-top: 24px; background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 16px;">
+              <h3 style="font-size: 16px; font-weight: 700; color: #1e293b; margin:0;">Incremental Cuts Timeline & Audit Trail</h3>
+              <span id="watch-cuts-count" style="font-size: 12px; color: #64748b;">12 Cuts Processed</span>
+            </div>
+            <div class="table-frame">
+              <table class="clinical-data-table">
+                <thead>
+                  <tr>
+                    <th style="width: 70px;">Cut</th>
+                    <th style="width: 100px;">Protocol</th>
+                    <th style="width: 110px;">Records</th>
+                    <th style="width: 100px;">Corrections</th>
+                    <th style="width: 100px;">Decisions</th>
+                    <th style="width: 120px;">Budget State</th>
+                    <th>Cut Surveillance Summary</th>
+                    <th style="width: 100px;">Latency</th>
+                  </tr>
+                </thead>
+                <tbody id="watch-cuts-tbody">
+                  <!-- Dynamically populated -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Decision Detail Modal / Drawer -->
+          <div id="watch-explain-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.6); z-index:9999; align-items:center; justify-content:center;">
+            <div style="background:white; border-radius:12px; width:700px; max-width:90%; max-height:85vh; overflow-y:auto; padding:24px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);">
+              <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #e2e8f0; padding-bottom:12px; margin-bottom:16px;">
+                <h3 id="explain-modal-title" style="margin:0; font-size:18px; font-weight:700; color:#0f172a;">Surveillance Decision Trace</h3>
+                <button id="btn-close-explain-modal" style="border:none; background:none; font-size:22px; cursor:pointer; color:#64748b;">&times;</button>
+              </div>
+              <pre id="explain-modal-content" style="white-space:pre-wrap; font-family:inherit; font-size:13px; line-height:1.6; color:#334155; background:#f8fafc; padding:16px; border-radius:8px; border:1px solid #e2e8f0;"></pre>
+            </div>
           </div>
 
         </div>

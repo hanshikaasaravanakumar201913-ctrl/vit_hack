@@ -29,6 +29,7 @@ from stage1.ai import AtlasConversationalOrchestrator
 from starter.schemas import Question
 from stage2.crew import ReviewCrew
 from stage2.models import GateDecision
+from stage3.watch import WatchSurveillance
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("atlas.server")
@@ -38,6 +39,7 @@ GRAPH: Optional[StudyGraph] = None
 ATLAS_ENGINE: Optional[Atlas] = None
 DATA_DIR_PATH: Optional[Path] = None
 REVIEW_CREW: Optional[ReviewCrew] = None
+WATCH_SURVEILLANCE: Optional[WatchSurveillance] = None
 AI_ORCHESTRATOR: Optional[AtlasConversationalOrchestrator] = None
 
 PUBLIC_DEMO_QUESTIONS = [
@@ -90,6 +92,36 @@ PUBLIC_DEMO_QUESTIONS = [
         "question_id": "Q010",
         "category": "Dosing Deviations",
         "text": "Which subjects at site S02 received a wrong dose?",
+    },
+    {
+        "question_id": "Q_WATCH_01",
+        "category": "Watch Surveillance",
+        "text": "Which site has suspicious reporting behavior?",
+    },
+    {
+        "question_id": "Q_WATCH_02",
+        "category": "Watch Surveillance",
+        "text": "Why was S04 flagged at Cut 8?",
+    },
+    {
+        "question_id": "Q_WATCH_03",
+        "category": "Watch Surveillance",
+        "text": "Was this a patient safety issue?",
+    },
+    {
+        "question_id": "Q_WATCH_04",
+        "category": "Watch Surveillance",
+        "text": "What changed in the latest protocol amendment?",
+    },
+    {
+        "question_id": "Q_WATCH_05",
+        "category": "Watch Surveillance",
+        "text": "What monitor escalations are still pending?",
+    },
+    {
+        "question_id": "Q_WATCH_06",
+        "category": "Watch Surveillance",
+        "text": "Explain decision D-009",
     },
 ]
 
@@ -160,6 +192,28 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
             self._handle_monitor_escalations()
         elif path == "/api/monitor/memory":
             self._handle_monitor_memory()
+        elif path == "/api/watch/cuts":
+            self._handle_watch_cuts()
+        elif path.startswith("/api/watch/cut/"):
+            c_str = path[len("/api/watch/cut/"):].strip()
+            try:
+                c_num = int(c_str)
+            except:
+                c_num = 12
+            self._handle_watch_cut_detail(c_num)
+        elif path == "/api/watch/decisions":
+            self._handle_watch_decisions()
+        elif path.startswith("/api/watch/decision/"):
+            dec_id = unquote(path[len("/api/watch/decision/"):].strip())
+            self._handle_watch_explain_decision(dec_id)
+        elif path == "/api/watch/suspicious-sites":
+            self._handle_watch_suspicious_sites()
+        elif path == "/api/watch/data-integrity":
+            self._handle_watch_data_integrity()
+        elif path == "/api/watch/protocol-amendments":
+            self._handle_watch_protocol_amendments()
+        elif path == "/api/watch/budget":
+            self._handle_watch_budget()
         else:
             # Fallback to serving static frontend files
             super().do_GET()
@@ -181,6 +235,10 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
             self._handle_monitor_fact_check()
         elif path == "/api/monitor/comment":
             self._handle_monitor_comment()
+        elif path == "/api/watch/run":
+            self._handle_watch_run_cuts()
+        elif path == "/api/watch/explain":
+            self._handle_watch_explain_post()
         else:
             self._send_json({"error": "Endpoint not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -821,9 +879,178 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
             })
 
 
+    # -------------------------------------------------------------------------
+    # Stage 3 — WATCH Surveillance API Handlers
+    # -------------------------------------------------------------------------
+
+    def _handle_watch_cuts(self) -> None:
+        """GET /api/watch/cuts — Returns summary of all surveillance cuts."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        reports_summary = []
+        for cut_num in sorted(WATCH_SURVEILLANCE.cut_reports.keys()):
+            rep = WATCH_SURVEILLANCE.cut_reports[cut_num]
+            reports_summary.append(rep.to_dict())
+
+        self._send_json({
+            "status": "success",
+            "active_cut": WATCH_SURVEILLANCE.active_cut,
+            "protocol_version": WATCH_SURVEILLANCE.current_protocol_version,
+            "total_decisions": len(WATCH_SURVEILLANCE.decisions_log),
+            "budget_state": WATCH_SURVEILLANCE.budget.get_state().value,
+            "cuts": reports_summary,
+        })
+
+    def _handle_watch_cut_detail(self, cut_num: int) -> None:
+        """GET /api/watch/cut/{cut_num} — Returns full report for a specific cut."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        rep = WATCH_SURVEILLANCE.cut_reports.get(cut_num)
+        if not rep:
+            rep = WATCH_SURVEILLANCE.process_cut(cut_num)
+
+        self._send_json(rep.to_dict())
+
+    def _handle_watch_decisions(self) -> None:
+        """GET /api/watch/decisions — Returns all logged surveillance decisions."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        decs = [d.to_dict() for d in WATCH_SURVEILLANCE.decisions_log.values()]
+        self._send_json({
+            "total": len(decs),
+            "decisions": decs,
+        })
+
+    def _handle_watch_explain_decision(self, decision_id: str) -> None:
+        """GET /api/watch/decision/{id} — Explains decision from stored trace."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        res = WATCH_SURVEILLANCE.explain(decision_id)
+        status_code = HTTPStatus.OK if res.get("found") else HTTPStatus.NOT_FOUND
+        self._send_json(res, status=status_code)
+
+    def _handle_watch_suspicious_sites(self) -> None:
+        """GET /api/watch/suspicious-sites — Returns low-variability statistical anomalies."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        findings = WATCH_SURVEILLANCE.site_detector.detect_low_variability_sites(cut=12)
+        self._send_json({
+            "findings_count": len(findings),
+            "findings": [f.to_dict() for f in findings],
+        })
+
+    def _handle_watch_data_integrity(self) -> None:
+        """GET /api/watch/data-integrity — Returns laboratory analyser unit mismatch anomalies."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        findings = WATCH_SURVEILLANCE.integrity_detector.detect_analyser_unit_mismatch(cut=12)
+        self._send_json({
+            "findings_count": len(findings),
+            "findings": [f.to_dict() for f in findings],
+        })
+
+    def _handle_watch_protocol_amendments(self) -> None:
+        """GET /api/watch/protocol-amendments — Returns protocol diffs and affected findings."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        diff2 = WATCH_SURVEILLANCE.amendment_detector.get_protocol_diff(1, 2, 5)
+        diff3 = WATCH_SURVEILLANCE.amendment_detector.get_protocol_diff(2, 3, 9)
+        self._send_json({
+            "active_version": WATCH_SURVEILLANCE.current_protocol_version,
+            "amendments": [diff2.to_dict(), diff3.to_dict()],
+        })
+
+    def _handle_watch_budget(self) -> None:
+        """GET /api/watch/budget — Returns current budget consumption and state."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        b = WATCH_SURVEILLANCE.budget
+        self._send_json({
+            "state": b.get_state().value,
+            "elapsed_seconds": b.get_elapsed_seconds(),
+            "remaining_seconds": b.get_remaining_seconds(),
+            "total_budget_seconds": b.total_seconds,
+            "operations_count": b.operations_count,
+            "records_processed": b.records_processed,
+            "degradation_profile": b.get_degradation_profile(),
+        })
+
+    def _handle_watch_run_cuts(self) -> None:
+        """POST /api/watch/run — Executes longitudinal surveillance cuts."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        target_cut = 12
+        if content_length > 0:
+            try:
+                body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+                target_cut = int(body.get("cut", 12))
+            except:
+                pass
+
+        reports = WATCH_SURVEILLANCE.run_all_cuts(target_cut)
+        self._send_json({
+            "status": "completed",
+            "cuts_processed": len(reports),
+            "active_cut": WATCH_SURVEILLANCE.active_cut,
+            "total_decisions": len(WATCH_SURVEILLANCE.decisions_log),
+        })
+
+    def _handle_watch_explain_post(self) -> None:
+        """POST /api/watch/explain — Explains decision from stored trace."""
+        global WATCH_SURVEILLANCE
+        if WATCH_SURVEILLANCE is None:
+            self._send_json({"error": "WatchSurveillance not initialized"}, status=HTTPStatus.SERVICE_UNAVAILABLE)
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length <= 0:
+            self._send_json({"error": "Empty body"}, status=HTTPStatus.BAD_REQUEST)
+            return
+
+        try:
+            body = json.loads(self.rfile.read(content_length).decode("utf-8"))
+            decision_id = str(body.get("decision_id", "")).strip()
+            if not decision_id:
+                self._send_json({"error": "decision_id is required"}, status=HTTPStatus.BAD_REQUEST)
+                return
+
+            res = WATCH_SURVEILLANCE.explain(decision_id)
+            self._send_json(res)
+        except Exception as e:
+            self._send_json({"error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+
 def start_server(host: Optional[str] = None, port: Optional[int] = None, data_dir: Optional[str] = None) -> None:
-    """Initializes StudyGraph, Atlas Engine, ReviewCrew, and AI Conversational Orchestrator."""
-    global GRAPH, ATLAS_ENGINE, DATA_DIR_PATH, REVIEW_CREW, AI_ORCHESTRATOR
+    """Initializes StudyGraph, Atlas Engine, ReviewCrew, WatchSurveillance, and AI Conversational Orchestrator."""
+    global GRAPH, ATLAS_ENGINE, DATA_DIR_PATH, REVIEW_CREW, WATCH_SURVEILLANCE, AI_ORCHESTRATOR
 
     # Bind host to 0.0.0.0 for cloud deployment compatibility (e.g. Render)
     target_host = host if host is not None else os.environ.get("HOST", "0.0.0.0")
@@ -857,7 +1084,17 @@ def start_server(host: Optional[str] = None, port: Optional[int] = None, data_di
 
     ATLAS_ENGINE = Atlas(GRAPH)
     REVIEW_CREW = ReviewCrew(atlas=ATLAS_ENGINE)
-    AI_ORCHESTRATOR = AtlasConversationalOrchestrator(atlas=ATLAS_ENGINE)
+    WATCH_SURVEILLANCE = WatchSurveillance(atlas=ATLAS_ENGINE, review_crew=REVIEW_CREW)
+    print("Pre-running 12 Watch longitudinal surveillance cuts...")
+    WATCH_SURVEILLANCE.run_all_cuts(12)
+    print(f"  • Watch Cuts:      12 processed")
+    print(f"  • Watch Decisions: {len(WATCH_SURVEILLANCE.decisions_log)} logged")
+
+    AI_ORCHESTRATOR = AtlasConversationalOrchestrator(
+        atlas=ATLAS_ENGINE,
+        review_crew=REVIEW_CREW,
+        watch=WATCH_SURVEILLANCE,
+    )
 
     print(f"Graph initialized in {stats['build_time_ms']} ms:")
     print(f"  • Subjects: {stats['subjects']}")
