@@ -595,9 +595,19 @@ class AtlasRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
 
 
-def start_server(host: str = "127.0.0.1", port: int = 8080, data_dir: Optional[str] = None) -> None:
+def start_server(host: Optional[str] = None, port: Optional[int] = None, data_dir: Optional[str] = None) -> None:
     """Initializes StudyGraph, Atlas Engine, and launches the HTTP Server."""
     global GRAPH, ATLAS_ENGINE, DATA_DIR_PATH, REVIEW_CREW
+
+    # Bind host to 0.0.0.0 for cloud deployment compatibility (e.g. Render)
+    target_host = host if host is not None else os.environ.get("HOST", "0.0.0.0")
+    if port is not None:
+        target_port = port
+    else:
+        try:
+            target_port = int(os.environ.get("PORT", "8080"))
+        except (ValueError, TypeError):
+            target_port = 8080
 
     resolved_data_dir = (
         Path(data_dir)
@@ -628,8 +638,8 @@ def start_server(host: str = "127.0.0.1", port: int = 8080, data_dir: Optional[s
     print(f"  • Edges:    {stats['edges']}")
     print("=" * 64)
 
-    server = ThreadingHTTPServer((host, port), AtlasRequestHandler)
-    url = f"http://{host}:{port}"
+    server = ThreadingHTTPServer((target_host, target_port), AtlasRequestHandler)
+    url = f"http://{target_host}:{target_port}"
     print(f"Server online at: {url}")
     print("Press Ctrl+C to stop.")
     print("=" * 64)
@@ -642,9 +652,15 @@ def start_server(host: str = "127.0.0.1", port: int = 8080, data_dir: Optional[s
 
 
 if __name__ == "__main__":
+    try:
+        env_port = int(os.environ.get("PORT", "8080"))
+    except (ValueError, TypeError):
+        env_port = 8080
+    env_host = os.environ.get("HOST", "0.0.0.0")
+
     parser = argparse.ArgumentParser(description="ATLAS Production Web Application Server")
-    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8080, help="Port number (default: 8080)")
+    parser.add_argument("--host", type=str, default=env_host, help=f"Host address (default: {env_host})")
+    parser.add_argument("--port", type=int, default=env_port, help=f"Port number (default: {env_port})")
     parser.add_argument("--data", type=str, default=None, help="Path to hackathon study data directory")
     args = parser.parse_args()
 
